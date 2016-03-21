@@ -10,19 +10,391 @@ library(lmPerm)
 library(nlme)
 library(lme4)
 library(reshape2)
-library(MRCE)
+library(doBy)
 # plot libraries
 library(ggplot2)
 library(showtext) # needed for eps fonts to add Arial to .eps
 font.add('Arial',regular='Arial.ttf')
 library(gridExtra)
-
+library(pls)
+library(MRCE) # multivariate regression with correlated error
+library(gee) # generalized estimating equations
+library(geepack) #ditto
+library(GlobalAncova) # GlobalAncova
+library(limma) # Roast
+library(CCA) # canonical correlation Analysis
 
 # lmperm downloaded from https://github.com/kabacoff/RiA2/tree/master/lmPerm
 # using R-Studio chose Tools > Install Packages and the Install From > Package Archive pop-up menu.
 
 # originally coefficients computed raw then reversed during analysis but to compute the permutation GLH, these need to be reversed, so...
 # January 13 recomputed by reversing expression levels and not coefficients
+do_Fredrickson <- function(){
+  
+  clean <- TRUE
+  if(clean==FALSE){
+    clean_cole1()
+    clean_cole2()
+  }
+  
+  # generate resampled files to compute results
+  are_tests_run <- FALSE
+  are_gls_permutations_run <- TRUE
+  are_lme_permutations_run <- TRUE
+  are_gls_parametric_tests_run <- TRUE
+  are_gee_permutations_run <- TRUE
+  are_type_1_simulations_run <- TRUE
+  
+  fn <- 'cole1_clean.txt'
+  dt2013 <- read_file(fn,year=2013)
+  dt2013[,zhedonia:=scale(zhedonia)]
+  dt2013[,zeudaimonia:=scale(zeudaimonia)]
+  dt2013 <- contrast_coefficients(dt2013) # convert to CTRA response
+  
+  fn <- 'cole2_clean.txt'
+  dt2015 <- read_file(fn,year=2015)
+  dt2015[,zhedonia:=scale(zhedonia)]
+  dt2015[,zeudaimonia:=scale(zeudaimonia)]
+  dt2015 <- contrast_coefficients(dt2015)  # convert to CTRA response
+  
+  fn <- 'cole1_clean.txt'
+  dt1 <- read_file(fn,year=2015)
+  fn <- 'cole2_clean.txt'
+  dt2 <- read_file(fn,year=2015)
+  # illness in FRED2015 is averaged over the 13 categories so divide illness in FRED13 by 13 to be in same scale as in FRED15. Even with this the range of FRED15 is about 2X that of FRED13.
+  dt1[,illness:=(illness/13)]
+  dtCombi <- rbind(dt1,dt2)
+  # rescale zhedonia and zeudaimonia
+  dtCombi[,zhedonia:=scale(zhedonia)]
+  dtCombi[,zeudaimonia:=scale(zeudaimonia)]
+  dtCombi <- contrast_coefficients(dtCombi)  # convert to CTRA response
+  
+  if(are_tests_run==FALSE){
+    # note that in FRED13, smoke has only 6/77 scored as 1 and some bootstraps will entirely miss this. See note in bootstrap_t_test
+    permutation_t_tests(dt2013,which_file='FRED13',niter=2000)
+    permutation_t_tests(dt2015,which_file='FRED15',niter=2000)
+    permutation_t_tests(dtCombi,which_file='FRED.Combi',niter=2000)
+    
+    boot_t_tests(dt2013,which_file='FRED13',niter=2000)
+    boot_t_tests(dt2015,which_file='FRED15',niter=2000)
+    boot_t_tests(dtCombi,which_file='FRED.Combi',niter=2000)
+    
+    bootstrap_models(dt2013,which_file='FRED13',tests=c('gee'), niter=2000)
+    bootstrap_models(dt2015,which_file='FRED15',tests=c('gee'), niter=2000)
+    bootstrap_models(dtCombi,which_file='FRED.Combi',tests=c('gee'), niter=2000)
+ 
+    bootstrap_models(dt2013,which_file='FRED13',tests=c('gls'), niter=100)
+    bootstrap_models(dt2015,which_file='FRED15',tests=c('gls'), niter=100)
+    bootstrap_models(dtCombi,which_file='FRED.Combi',tests=c('gls'), niter=100)
+
+    bootstrap_obrien(dt2013,fn='FRED13.obrien', niter=1000,initer=1000)
+    bootstrap_obrien(dt2015,fn='FRED15.obrien', niter=1000,initer=1000)
+    bootstrap_obrien(dtCombi,fn='FRED.Combi.obrien', niter=1000,initer=1000)
+    
+    permutation_obrien(dt2013,fn='FRED13.obrien', niter=2000,initer=1000)
+    permutation_obrien(dt2015,fn='FRED15.obrien', niter=2000,initer=1000)
+    permutation_obrien(dtCombi,fn='FRED.Combi.obrien', niter=2000,initer=1000)
+  }
+  if(are_gls_permutations_run==FALSE){
+      do_gls_tests(dt2013,which_file='FRED13', method='gls', niter=101)
+      do_gls_tests(dt2015,which_file='FRED15', method='gls', niter=101)
+      do_gls_tests(dtCombi,which_file='FRED.Combi', method='gls', niter=101)
+  }
+  if(are_lme_permutations_run==FALSE){
+    do_gls_tests(dt2013,which_file='FRED13', method='lme', niter=101) # doens't converge
+    do_gls_tests(dt2015,which_file='FRED15', method='lme', niter=101)
+    do_gls_tests(dtCombi,which_file='FRED.Combi', method='lme', niter=101)
+  }
+  if(are_gee_permutations_run==FALSE){
+    do_gls_tests(dt2013,which_file='FRED13', method='gee', niter=2000)
+    do_gls_tests(dt2015,which_file='FRED15', method='gee', niter=2000)
+    do_gls_tests(dtCombi,which_file='FRED.Combi', method='gee', niter=2000)
+  }
+  if(are_gls_parametric_tests_run==FALSE){
+    saveRDS(gls_with_correlated_error(dt2013, year=2013), "FRED13.gls.rds")
+    saveRDS(gls_with_correlated_error(dt2015, year=2015), "FRED15.gls.rds")
+    saveRDS(gls_with_correlated_error(dtCombi, year=2015), "FRED.Combi.gls.rds")
+    saveRDS(gls_with_correlated_error(dt2013, year=2015), "FRED13.yr2015.gls.rds")
+  }
+  if(are_type_1_simulations_run==FALSE){
+    simulate_type1_error(run_simulations=TRUE)
+  }else{
+    type_1_error_table <- simulate_type1_error(run_simulations=FALSE)
+    }
+
+  # compute all tables
+  which_file_list <- c('FRED13', 'FRED15', 'FRED.Combi')
+  hypotheses <- c('zhedonia','zeudaimonia','delta')
+  tests <- c('bootstrap_t','perm_t','perm_gls','perm_gee')
+  zcols <- c('zhedonia','zeudaimonia')
+  
+  naive_p_table <- data.table(NULL) # naive t-test p-values
+  ols_table <- data.table(NULL) # average beta over m responses
+  gls_table <- data.table(NULL) # common effect estimated by GLS
+  gee_table <- data.table(NULL) # common effect estimated by GEE
+  delta_table <- data.table(NULL)
+    
+  effect_matrix <- matrix(0,nrow=3,ncol=2) # matrix of backtransformed effects
+  colnames(effect_matrix) <- c('zhedonia','zeudaimonia')
+  row.names(effect_matrix) <- which_file_list
+  resid_df <- numeric(3) # put the df of the t-tests for the gls here
+  names(resid_df) <- which_file_list
+  gls_perm_type_1_error_table <- data.table(NULL) # not the error of the perm test but the error of the parametric computed from the perm results
+  
+  effective_size_table <- numeric(3)
+  names(effective_size_table) <- which_file_list
+
+  for(which_file in which_file_list){
+    if(which_file=='FRED13'){dt <- copy(dt2013)}
+    if(which_file=='FRED15'){dt <- copy(dt2015)}
+    if(which_file=='FRED.Combi'){dt <- copy(dtCombi)}
+    if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+    ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+    R <- cor(as.matrix(dt[,.SD,.SDcols=ycols]))
+    mean(abs(R[lower.tri(R)]))
+    max(abs(R[lower.tri(R)]))
+    
+    # OLS table
+    fn <- paste('coeff.',which_file,'.permutation.txt',sep='')
+    ols_perm <- data.table(read.table(fn,header=TRUE))  # read in raw (not multiplied by contrast coeff) regression coefficients
+    ols_perm[, beta:=apply(ols_perm[, .SD, .SDcols=ycols], 1, mean)]
+    beta <- ols_perm[data=='obs',.(Type,beta)]
+    fn <- paste(which_file,'.bootstrap.txt',sep='')
+    boot_coeffs <- data.table(read.table(fn,header=TRUE))  # read in regression coefficients
+    boot_coeffs[, beta:=apply(boot_coeffs[, .SD, .SDcols=ycols], 1, mean)]
+    beta.boot <- boot_coeffs[data=='obs',.(Type,beta)]
+    part_table <- get_ols_table(boot_coeffs,which_file)[,.(Type,Data,beta,SE)] # delete CIs
+    ols_boot_p <- smart_t_stats(boot_coeffs)
+    part_table[, boot_p:=ols_boot_p]
+    ols_perm_p <- permutation_t(ols_perm,statistic='t')
+    part_table[, perm_p:=ols_perm_p]
+    # obrien permutation
+    fn <- paste(which_file,'.obrien.perm.txt',sep='')
+    obrien_res <- data.table(read.table(fn,header=TRUE)) # O'Brien T statistics
+    obrien_p <- apply(abs(obrien_res),2,permutation.p.value)
+    part_table[, obrien_p:=obrien_p]
+    # obrien t
+    #fn <- paste(which_file,'.obrien.boot.txt',sep='')
+    #obrien_res <- data.table(read.table(fn,header=TRUE)) # O'Brien T statistics
+    #obrien_se <- apply(obrien_res,2,quantile,prob=c(0.025,0.975))
+    # roast
+    rot_p <- roast_it(dt)
+    part_table[, rot_p:=rot_p]
+    
+    ols_table <- rbind(ols_table,part_table)
+    
+    delta_table <- rbind(delta_table, data.table(Test='OLS', Data=which_file, Delta=part_table[Type=='delta', beta], boot_SE=part_table[Type=='delta', SE], boot_p=ols_boot_p['delta'], perm_p=ols_perm_p['delta'], obrien_p=obrien_p['Tdelta'], rot_p=rot_p['delta']))
+     
+    # effect size back in units of FRED13
+    # compute back-transformed effect size
+    effect_matrix[which_file,] <- effect_size(dt) # effect size for observed data
+    # do naive t test first following FRED13
+    naive_t_table <- naive_t_stats(dt) #(reported in FRED13: eudaimonic, P = 0.0045; hedonic, P = 0.0047)
+    naive_p_table <- rbind(naive_p_table, data.table(data=which_file,naive_t_table[stat=='p.value',]))
+
+    # gls coefficients and p-values
+    fit <- readRDS(paste(which_file,'.gls.rds',sep=''))
+    gls_res <- summary(fit)$tTable[zcols,]
+     # get bootstrap CIs of gls
+    gls_boot_se <- c(NA, NA, NA)
+    names(gls_boot_se) <- hypotheses
+    if(which_file == 'FRED.Combi'){
+      gls_boot_res <- read_bootstrap.gls_list('FRED.Combi.bootstrap.gls.list.txt')
+      gls_boot_res[,delta:=zhedonia-zeudaimonia]
+      gls_boot_se <- apply(gls_boot_res[,.SD,.SDcols=hypotheses],2,sd)
+ #     apply(gls_boot_res[,.SD,.SDcols=zcols],2,quantile,probs=c(0.025,0.975))
+    }
+    #compute permutation.gls stats
+    fn <- paste(which_file, '.permutation.gls.list.txt',sep='')
+    gls_perm_res <- permutation.gls.p.value(read_permutation.gls_list(fn), statistic='t')
+    gls_table <- rbind(gls_table, data.table(
+      Type=row.names(gls_res),
+      Data=which_file,
+      gls_res[,c('Value','Std.Error','p-value')],
+      boot_SE=gls_boot_se[zcols],
+      perm_p=gls_perm_res[c('t.zhedonia','t.zeudaimonia')]
+      ))
+    # uncomment to get CI on p-value for paper
+    # permutation.gls.p.value(res, statistic='t',do_ci=TRUE) # get 95% CI on p-values
+
+    # do gee
+    gee_res <- gee_delta(gee_with_correlated_error(dt))
+    gee_boot_se <- gee_bootstrap_se(which_file)
+    gee_p <- gee_permutation_p(which_file)
+    gee_table <- rbind(gee_table, data.table(
+      Type=c(zcols,'delta'),
+      Data=which_file,
+      beta=gee_res[, 'Estimate'],
+      se_robust=gee_res[, 'Std.err'],
+      se_boot=gee_boot_se,
+      wald_boot=gee_res[, 'Estimate']^2/gee_boot_se^2,
+      boot_p=wald_test(gee_res[, 'Estimate'],gee_boot_se),
+      perm_p=gee_p
+      ))
+  
+  }
+  
+  # clean tables
+  gee_table[, Type:=factor(Type)]
+  gee_table <- round_dt(orderBy(~-Type, gee_table), 3)
+  gee_table[,boot_p:=round(boot_p,2)]
+  gee_table[,perm_p:=round(perm_p,2)]
+  gee_table <- gee_table[Type!='delta'] # delta now in its own table
+  
+  ols_table[, Type:=factor(Type)]
+  ols_table <- round_dt(orderBy(~-Type,ols_table),3)
+  ols_table[,boot_p:=round(boot_p,2)]
+  ols_table[,perm_p:=round(perm_p,2)]
+  ols_table[,rot_p:=round(rot_p,2)]
+  ols_table[,obrien_p:=round(obrien_p,2)]
+  ols_table <- ols_table[Type!='delta'] # delta now in its own table
+  
+  gls_table[, Type:=factor(Type)]
+  gls_table <- round_dt(orderBy(~-Type, gls_table), 3)
+  gls_table[,perm_p:=round(perm_p,2)]
+ 
+  delta_table[, Test:=factor(Test)]
+  delta_table <- round_dt(orderBy(~-Test, delta_table), 3)
+  delta_table[,perm_p:=round(perm_p,2)]
+  delta_table[,boot_p:=round(boot_p,2)]
+  delta_table[,rot_p:=round(rot_p,2)]
+  delta_table[,obrien_p:=round(obrien_p,2)]
+ 
+  effect_matrix <- data.table(data=row.names(effect_matrix),(round(effect_matrix,1)))
+  naive_p_table <- round_dt(naive_p_table,3)
+  naive_p_table <- naive_p_table[,.SD,.SDcols=c('data','zhedonia','zeudaimonia')]
+  naive_effect_table <- merge(effect_matrix,naive_p_table,by='data')
+
+  naive_effect_table
+  gls_table
+  ols_table
+  gee_table
+  delta_table
+  
+  write.table(naive_effect_table,'naive_effect_table.txt',sep='\t',quote=FALSE,row.names=FALSE)
+  write.table(gls_table,'gls_table.txt',sep='\t',quote=FALSE,row.names=FALSE)
+  write.table(ols_table, 'ols_table.txt',quote=FALSE,row.names=FALSE,sep='\t')
+  write.table(gee_table, 'gee_table.txt',quote=FALSE,row.names=FALSE,sep='\t')
+  write.table(delta_table, 'delta_table.txt',quote=FALSE,row.names=FALSE,sep='\t')
+  # end function
+  
+}
+
+figure_0 <- function(){
+  # plot of residual vs fitted for GLS and GEE for combined
+  dt <- copy(dtCombi)
+  year <- 2015
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  xcols <- get_xcols()
+  zcols <- c('zhedonia','zeudaimonia')
+  dtlong <- get_dtlong(dt, year=2015, center=TRUE)
+  dtlong <- orderBy(~subject + gene,dtlong)
+  form <- formula(paste('expression~',paste(c('gene',xcols),collapse='+'),sep=''))
+  #form <- formula(paste('expression~',paste(xcols,collapse='+'),sep=''))
+
+  fit.geeglm <- geeglm(form, family=gaussian, data=dtlong,id=subject, waves=gene, corstr='exchangeable', std.err="san.se")
+  summary(fit.geeglm)$coefficients[zcols,]
+  qplot(fit.geeglm$fitted.values,fit.geeglm$residuals)
+  # compare this to the GLS fit
+  
+  fit.gls.hetero <- readRDS(paste(which_file='FRED.Combi','.gls.rds',sep=''))
+  qplot(fit.gls.hetero$fitted,fit.gls.hetero$residuals)
+  
+  # is the bias due to the heterogenous, what about exchangeable?
+  fit.gls.homo <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
+  qplot(fit.gls.homo$fitted,fit.gls.homo$residuals)
+  # yes
+  
+  # what about lme with hetergenous?
+  fit.lme <- lme(form, random = ~1|subject, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=lmeControl(maxIter=100, msMaxIter = 500, tolerance=1e-6, msVerbose = FALSE)) # tolerance=1e-6 default
+  saveRDS(fit.lme, "FRED.Combi.lme.rds")
+  summary(fit.lme)$tTable[zcols,]
+  qplot(fit.lme$fitted[,'fixed'],fit.lme$residuals[,'fixed'])
+  qplot(fit.lme$fitted[,'subject'],fit.lme$residuals[,'subject'])
+  
+}
+
+figure_1 <- function(){
+  # A scatterplot of regression coefficients for x=hedonia y=eudaimonia for two of the randomly permuted runs using the FRED.Combi data
+  which_file <- 'FRED13'
+  fn <- paste(which_file,'.permutation.txt',sep='')
+  part <- data.table(read.table(fn,header=TRUE))  # read in raw (not multiplied by contrast coeff) regression coefficients
+  dt <- data.table(data=which_file,part)
+  which_file <- 'FRED15'
+  fn <- paste(which_file,'.permutation.txt',sep='')
+  part <- data.table(read.table(fn,header=TRUE))  # read in raw (not multiplied by contrast coeff) regression coefficients
+  dt <- rbind(dt,data.table(data=which_file,part),fill=TRUE)
+  which_file <- 'FRED.Combi'
+  fn <- paste(which_file,'.permutation.txt',sep='')
+  part <- data.table(read.table(fn,header=TRUE))  # read in raw (not multiplied by contrast coeff) regression coefficients
+  dt <- rbind(dt,data.table(data=which_file,part),fill=TRUE)
+  dt <- dt[,.(data,I,Type,IL1A)]
+  
+  dtcast <- merge(dt[Type=='hedonic',], dt[Type=='eudaimonic',],by=c('I','data'))
+  setnames(dtcast,c('I','gene','Type.x','hedonic','Type.y','eudaimonic'))
+  dtcast[I!=1,I:=0] # color observed differently from permuted
+  dtcast <- rbind(dtcast[I==0,],dtcast[I==1,]) # make the observed data last
+  dtcast[,I:=factor(as.character(I))]
+  dtcast[,cor(hedonic,eudaimonic),by=I]
+  gg <- ggplot(data=dtcast,aes(x=hedonic,y=eudaimonic,color=I))
+  gg <- gg + geom_point()
+  gg <- gg + scale_colour_manual(values=c("grey", "black"), #, "#E69F00,#56B4E9"
+                                 labels=c("Permuted", "Observed"))
+  #gg <- gg + scale_color_brewer(name=NULL,labels=c("Permuted", "Observed"), palette="Paired")
+  gg <- gg + labs(x='Hedonia',y = 'Eudaimonia')
+  gg <- gg + ggtitle('A')
+  gg <- gg + theme_bw() + theme(axis.title=element_text(size=10),axis.text=element_text(size=8),plot.title=element_text(hjust=0),strip.text=element_text(size=8),legend.title=element_blank(),legend.position=c(.85,.9),plot.margin=unit(x=c(0,0.1,0,0),'cm'))
+  gg
+  gg1 <- gg
+  
+  fn <- paste('FRED13', '.permutation.gls.list.txt',sep='')
+  res <- read_permutation.gls_list(fn)
+  setnames(res,c('permutation','hedonic','eudaimonic','t.zhedonia','t.zeudaimonia'))
+  dt <- copy(res)
+  fn <- paste('FRED15', '.permutation.gls.list.txt',sep='')
+  res <- read_permutation.gls_list(fn)
+  setnames(res,c('permutation','hedonic','eudaimonic','t.zhedonia','t.zeudaimonia'))
+  dt <- rbind(dt,res)
+  fn <- paste('FRED.Combi', '.permutation.gls.list.txt',sep='')
+  res <- read_permutation.gls_list(fn)
+  setnames(res,c('permutation','hedonic','eudaimonic','t.zhedonia','t.zeudaimonia'))
+  dt <- rbind(dt,res)
+  dt[permutation=='perm',I:=0]
+  dt[permutation=='obs',I:=1]
+  dt[,I:=factor(as.character(I))] # make I factor
+  dt <- rbind(dt[I=='0',], dt[I=='1']) # plot perm first
+  gg <- ggplot(data=dt,aes(x=hedonic,y=eudaimonic,color=I))
+  gg <- gg + geom_point()
+  gg <- gg + scale_colour_manual(values=c("grey", "black"), #, "#E69F00,#56B4E9"
+                                 labels=c("Permuted", "Observed"))
+  gg <- gg + labs(x='Hedonia',y = 'Eudaimonia')
+  gg <- gg + ggtitle('B')
+  gg <- gg + theme_bw() + theme(axis.title=element_text(size=10),axis.text=element_text(size=8),plot.title=element_text(hjust=0),strip.text=element_text(size=8),legend.title=element_blank(),legend.position=c(.85,.9),plot.margin=unit(x=c(0,0.1,0,0),'cm'))
+  gg
+  gg2 <- gg
+  
+  
+  fig_name <- paste('Fig_1.pdf',sep='')
+  pdf(fig_name,paper='special',onefile=FALSE,width=6.5,height=3)
+  #  postscript('fig_01.eps',horizontal=FALSE,onefile=FALSE,paper='special',height=3,width=6.5)
+  showtext.begin()
+  print(gg1)
+  print(gg2)
+  grid.arrange(gg1,gg2,ncol=2,nrow=1)
+  showtext.end()
+  dev.off()
+  
+}
+
+effective_size <- function(N, R){
+  # N is the number of subjects
+  # R is the within subject error matrix
+  rho <- mean(abs(R[lower.tri(R)]))
+  n <- nrow(R)
+  Nn <- N*n
+  Ne <- Nn/(1 + rho*(n-1))
+  return(Ne)
+}
 
 clean_cole1 <- function(){
   # cole1 downloaded from http://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE45330
@@ -140,204 +512,6 @@ compare_cole1_brown <- function(){
   data.frame(cole1=cole1[,alcohol],brown=brown[,alcohol]) #NA in both
 }
 
-do_Fredrickson <- function(){
-  
-  # generate resampled files to compute results
-  are_tests_run <- TRUE
-  fn <- 'cole1_clean.txt'
-  dt2013 <- read_file(fn,year=2013)
-
-  fn <- 'cole2_clean.txt'
-  dt2015 <- read_file(fn,year=2015)
-  
-  fn <- 'cole1_clean.txt'
-  dt1 <- read_file(fn,year=2015)
-  fn <- 'cole2_clean.txt'
-  dt2 <- read_file(fn,year=2015)
-  # illness in FRED2015 is averaged over the 13 categories so divide illness in FRED13 by 13 to be in same scale as in FRED15. Even with this the range of FRED15 is about 2X that of FRED13.
-  dt1[,illness:=(illness/13)]
-  dtCombi <- rbind(dt1,dt2)
-  # rescale zhedonia and zeudaimonia
-  dtCombi[,zhedonia:=scale(zhedonia)]
-  dtCombi[,zeudaimonia:=scale(zeudaimonia)]
-
-  if(are_tests_run==FALSE){
-    do_tests(dt2013,which_file='FRED13',niter=niter,exclude_smoke = FALSE)
-    do_tests(dt2015,which_file='FRED15',niter=niter,exclude_smoke = TRUE)
-    do_tests(dtCombi,which_file='FRED.Combi',niter=niter,exclude_smoke = FALSE)
-  }
-  if(are_gls_permutations_run==FALSE){
-    
-  }
-  if(are_gls_parametric_tests_run==FALSE){
-    fit1 <- 1
-    saveRDS(gls_with_correlated_error(dt2013), "FRED13.gls.rds")
-    saveRDS(gls_with_correlated_error(dt2015), "FRED15.gls.rds")
-    saveRDS(gls_with_correlated_error(dtCombi), "FRED.Combi.gls.rds")
-  }
-  
-  # print results. Have to do this semi-manually because I cannot get the glh results into the table except by looking at them.
-  which_file_list <- c('FRED13', 'FRED15', 'FRED.Combi')
-  naive_p_table <- data.table(NULL)
-  gls_table <- data.table(NULL)
-  gls_matrix <- matrix(0,nrow=1,ncol=4)
-  p_matrix <- matrix(0,nrow=15,ncol=3)
-  colnames(p_matrix) <- c('zhedonia','zeudaimonia','delta')
-  effect_matrix <- matrix(0,nrow=3,ncol=2) # matrix of backtransformed effects
-  colnames(effect_matrix) <- c('zhedonia','zeudaimonia')
-  row.names(effect_matrix) <- which_file_list
-  data_set <- rep(which_file_list,each=5)
-  test <- rep(c('bootstrap_t','GLH','GLH_perm','t_perm','CE.LM_perm'),3)
-  for(which_file in which_file_list){
-    if(which_file=='FRED13'){dt <- copy(dt2013)}
-    if(which_file=='FRED15'){dt <- copy(dt2015)}
-    if(which_file=='FRED.Combi'){dt <- copy(dtCombi)}
-    
-    # get permutation data, the first row is the observed data
-    fn <- paste(which_file,'.permutation.txt',sep='')
-    res <- data.table(read.table(fn,header=TRUE))  # read in raw (not multiplied by contrast coeff) regression coefficients
-    res <- contrast_coefficients(res) # convert to contrasts
-    
-    # first compute stats as in FRED13 and FRED15 for confirmation that my data/analyses are the same
-    # compute back-transformed effect size
-    effect_matrix[which_file,] <- effect_size(res[I==1,]) # effect size for observed data
-    # do naive t test first following FRED13
-    naive_t_table <- naive_t_stats(res[I==1,]) #(reported in FRED13: eudaimonic, P = 0.0045; hedonic, P = 0.0047)
-    naive_p_table <- rbind(naive_p_table, data.table(data=which_file,naive_t_table[stat=='p.value',]))
-    # gls coefficients and p-values
-    fit <- readRDS(paste(which_file,'.gls.rds',sep=''))
-    gls_matrix[1,] <- round(c(summary(fit)$tTable[c('zhedonia'),c('Value','p-value')],summary(fit)$tTable[c('zeudaimonia'),c('Value','p-value')]),3)
-    colnames(gls_matrix) <- c('zhedonia','p-value','zeudaimonia','p-value')
-    gls_table <- rbind(gls_table,data.table(data=which_file,gls_matrix))
-    
-    
-    # now get new stats
-    # get permutation stats
-    p_matrix[data_set==which_file & test=='t_perm',] <- permutation_t(res,statistic='t')
-    p_matrix[data_set==which_file & test=='GLH_perm',] <- permutation_lambda(data.table(read.table(paste('wilks.',fn,sep=''),header=TRUE)))
-    
-    # compute GLH
-    glh <- GLH(dt)
-    print(glh$GLH1,SSP=FALSE,SSPE=FALSE) # zhedonia
-    print(glh$GLH2,SSP=FALSE,SSPE=FALSE) # zeudaimonia
-    print(glh$GLH3,SSP=FALSE,SSPE=FALSE) # delta
-    # fill in by hand. Should just use the matrices to compute my own p.value but this fails because I can't get the parameter n correct to compute df and F
-    glh_FRED13 <- c(zhedonia=0.2793,zeudaimonia=0.48086,delta=0.33484)
-    glh_FRED15 <- c(zhedonia=0.68856,zeudaimonia=0.44726,delta=0.70753)
-    glh_Combi <- c(zhedonia=0.50954,zeudaimonia=0.1491,delta=0.32279)
-    p_matrix[data_set=='FRED13' & test=='GLH',] <- glh_FRED13
-    p_matrix[data_set=='FRED15' & test=='GLH',] <- glh_FRED15
-    p_matrix[data_set=='FRED.Combi' & test=='GLH',] <- glh_Combi
-    toBibtex(citation("ouch"))
-    #compute permutation.gls stats
-    # do NOT contrast_coefficient these as this was done during the gls
-    fn <- paste(which_file, '.permutation.gls.list.txt',sep='')
-    #fn <- 'zeudaimoniaFRED15.permutation.gls.list.txt'
-    res <- read_permutation.gls_list(fn)
-    p_matrix[data_set==which_file & test=='CE.LM_perm',] <- permutation.gls.p.value(res, statistic='t')
-    p.adjust(permutation.gls.p.value(res, statistic='t'),method='fdr')
-    
-    permutation.gls.p.value(res, statistic='t',do_ci=TRUE) # get 95% CI on p-values
-    
-    # compute bootstrap stats
-    fn <- paste(which_file,'.bootstrap.txt',sep='')
-    res <- data.table(read.table(fn,header=TRUE))  # read in raw (not multiplied by contrast coeff) regression coefficients
-    res <- contrast_coefficients(res) # convert to contrasts
-    p_matrix[data_set==which_file & test=='bootstrap_t',] <- smart_t_stats(res)[,p.value]
-    
-  }
-  p_table <- data.table(data=data_set,test=test,round(p_matrix,2))
-  naive_p_table[,zhedonia:=round(zhedonia,3)]
-  naive_p_table[,zeudaimonia:=round(zeudaimonia,3)]
-  naive_p_table[,delta:=round(delta,3)]
-  naive_p_table <- naive_p_table[,.SD,.SDcols=c('data','zhedonia','zeudaimonia','delta')]
-  effect_matrix <- data.table(data=row.names(effect_matrix),(round(effect_matrix,1)))
-  p_table
-  naive_p_table
-  effect_matrix
-  gls_table
-  
-  write.table(effect_matrix,'effect_matrix.txt',sep='\t',quote=FALSE,row.names=FALSE)
-  write.table(naive_p_table,'naive_p_table.txt',sep='\t',quote=FALSE,row.names=FALSE)
-  write.table(p_table,'p_table.txt',sep='\t',quote=FALSE,row.names=FALSE)
-  write.table(gls_table,'gls_table.txt',sep='\t',quote=FALSE,row.names=FALSE)
-  
-}
-
-figure_1 <- function(){
-  # A scatterplot of contrast coefficients for x=hedonia y=eudaimonia for two of the randomly permuted runs using the FRED.Combi data
-  which_file <- 'FRED13'
-  fn <- paste(which_file,'.permutation.txt',sep='')
-  part <- data.table(read.table(fn,header=TRUE))  # read in raw (not multiplied by contrast coeff) regression coefficients
-  part <- contrast_coefficients(part) # convert to contrasts
-  dt <- data.table(data=which_file,part)
-  which_file <- 'FRED15'
-  fn <- paste(which_file,'.permutation.txt',sep='')
-  part <- data.table(read.table(fn,header=TRUE))  # read in raw (not multiplied by contrast coeff) regression coefficients
-  part <- contrast_coefficients(part) # convert to contrasts
-  dt <- rbind(dt,data.table(data=which_file,part),fill=TRUE)
-  which_file <- 'FRED.Combi'
-  fn <- paste(which_file,'.permutation.txt',sep='')
-  part <- data.table(read.table(fn,header=TRUE))  # read in raw (not multiplied by contrast coeff) regression coefficients
-  part <- contrast_coefficients(part) # convert to contrasts
-  dt <- rbind(dt,data.table(data=which_file,part),fill=TRUE)
-  dt <- dt[,.(data,I,Type,IL1A)]
- 
-  dtcast <- merge(dt[Type=='hedonic',], dt[Type=='eudaimonic',],by=c('I','data'))
-  setnames(dtcast,c('I','gene','Type.x','hedonic','Type.y','eudaimonic'))
-  dtcast[I!=1,I:=0] # color observed differently from permuted
-  dtcast <- rbind(dtcast[I==0,],dtcast[I==1,]) # make the observed data last
-  dtcast[,I:=factor(as.character(I))]
-  dtcast[,cor(hedonic,eudaimonic),by=I]
-  gg <- ggplot(data=dtcast,aes(x=hedonic,y=eudaimonic,color=I))
-  gg <- gg + geom_point()
-  gg <- gg + scale_colour_manual(values=c("grey", "black"), #, "#E69F00,#56B4E9"
-                         labels=c("Permuted", "Observed"))
-  #gg <- gg + scale_color_brewer(name=NULL,labels=c("Permuted", "Observed"), palette="Paired")
-  gg <- gg + labs(x='Hedonia',y = 'Eudaimonia')
-  gg <- gg + ggtitle('A')
-  gg <- gg + theme_bw() + theme(axis.title=element_text(size=10),axis.text=element_text(size=8),plot.title=element_text(hjust=0),strip.text=element_text(size=8),legend.title=element_blank(),legend.position=c(.85,.9))
-  gg
-  gg1 <- gg
-  
-  fn <- paste('FRED13', '.permutation.gls.list.txt',sep='')
-  res <- read_permutation.gls_list(fn)
-  setnames(res,c('permutation','hedonic','eudaimonic','t.zhedonia','t.zeudaimonia'))
-  dt <- copy(res)
-  fn <- paste('FRED15', '.permutation.gls.list.txt',sep='')
-  res <- read_permutation.gls_list(fn)
-  setnames(res,c('permutation','hedonic','eudaimonic','t.zhedonia','t.zeudaimonia'))
-  dt <- rbind(dt,res)
-  fn <- paste('FRED.Combi', '.permutation.gls.list.txt',sep='')
-  res <- read_permutation.gls_list(fn)
-  setnames(res,c('permutation','hedonic','eudaimonic','t.zhedonia','t.zeudaimonia'))
-  dt <- rbind(dt,res)
-  dt[permutation=='perm',I:=0]
-  dt[permutation=='obs',I:=1]
-  dt[,I:=factor(as.character(I))] # make I factor
-  dt <- rbind(dt[I=='0',], dt[I=='1']) # plot perm first
-  gg <- ggplot(data=dt,aes(x=hedonic,y=eudaimonic,color=I))
-  gg <- gg + geom_point()
-  gg <- gg + scale_colour_manual(values=c("grey", "black"), #, "#E69F00,#56B4E9"
-                                 labels=c("Permuted", "Observed"))
-  gg <- gg + labs(x='Hedonia',y = 'Eudaimonia')
-  gg <- gg + ggtitle('B')
-  gg <- gg + theme_bw() + theme(axis.title=element_text(size=10),axis.text=element_text(size=8),plot.title=element_text(hjust=0),strip.text=element_text(size=8),legend.title=element_blank(),legend.position=c(.85,.9))
-  gg
-  gg2 <- gg
-  
-  
-  fig_name <- paste('Fig_1.pdf',sep='')
-  pdf(fig_name,paper='special',onefile=FALSE,width=6.5,height=3)
-#  postscript('fig_01.eps',horizontal=FALSE,onefile=FALSE,paper='special',height=3,width=6.5)
-  showtext.begin()
-  print(gg1)
-  print(gg2)
-  grid.arrange(gg1,gg2,ncol=2,nrow=1)
-  showtext.end()
-  dev.off()
-  
-}
 
 read_file <- function(fn, year=2013){
   dt <- data.table(read.table(fn,header=TRUE,sep='\t'))
@@ -365,7 +539,70 @@ read_permutation.gls_list <- function(fn){
   return(res)
 }
 
-do_tests <- function(dt,which_file,niter=2000, exclude_smoke=FALSE){
+read_bootstrap.gls_list <- function(fn){
+  the_list <- as.character(read.table(fn)[,1])
+  res <- data.table(NULL)
+  for(i in 1:length(the_list)){
+    sfn <- the_list[i]
+    res <- rbind(res,read.table(sfn,header=TRUE))
+  }
+  
+  # check for multiple rows with perm=obs
+  obs_rows <- which(res[,samp]=='obs')
+  exc <- setdiff(obs_rows,obs_rows[1])
+  if(length(exc>=1)){res <- res[-exc,]}
+  return(res)
+}
+
+gee_bootstrap_se <- function(which_file='FRED13'){
+  if(which_file=='FRED13'){gee_fn <-'FRED13.AGSA.gee.table.txt'}
+  if(which_file=='FRED15'){gee_fn <-'FRED15.LWDK.gee.table.txt'}
+  if(which_file=='FRED.Combi'){gee_fn <-'FRED.Combi.OQKZ.gee.table.txt'}
+  gee_boot <- data.table(read.table(gee_fn,header=TRUE,sep='\t'))
+  gee_boot[, delta:=zhedonia-zeudaimonia]
+  ses <- apply(gee_boot[, .SD, .SDcols=c('zhedonia','zeudaimonia','delta')],2,sd)
+  # CIs <- gee_boot[,.(lwr=quantile(delta,0.025),upr=quantile(delta,0.975))]
+  return(ses)
+}
+
+gee_permutation_p <- function(which_file){
+  if(which_file=='FRED13'){gee_fn <-'FRED13.permutation.gee.ZHRW.gee.txt'}
+  if(which_file=='FRED15'){gee_fn <-'FRED15.permutation.gee.ULKU.gee.txt'}
+  if(which_file=='FRED.Combi'){gee_fn <-'FRED.Combi.permutation.gee.MEIF.gee.txt'}
+  gee_perm <- data.table(read.table(gee_fn,header=TRUE,sep='\t'))
+  gee_perm[, delta:=zhedonia-zeudaimonia]
+  gee_p <- apply(abs(gee_perm[,.SD,.SDcols=c('zhedonia', 'zeudaimonia','delta')]), 2, permutation.p.value)
+  return(gee_p)
+}
+
+round_dt <- function(df, digits) {
+  df <- data.frame(df)
+  nums <- vapply(df, is.numeric, FUN.VALUE = logical(1))
+  df[,nums] <- (round(df[,nums], digits = digits))
+  df <- data.table(df)
+  (df)
+}
+
+round_df <- function(df, digits) {
+  nums <- vapply(df, is.numeric, FUN.VALUE = logical(1))
+  df[,nums] <- round(df[,nums], digits = digits)
+  (df)
+}
+
+
+permutation_t_tests <- function(dt,which_file,niter=2000){
+  # dt is a data.table of the responses and regressors
+  # which_file is the file FRED13 or FRED15 Fredrickson et. al.
+
+  # get xcols and ycols
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  xcols <- get_xcols()
+  
+  permutation_test_anderson(dt,xcols,ycols,niter=niter,write_it=TRUE,fn=paste(which_file,'.permutation.txt',sep=''))
+}
+
+boot_t_tests <- function(dt,which_file,niter=2000, exclude_smoke=FALSE){
   # dt is a data.table of the responses and regressors
   # which_file is the file FRED13 or FRED15 Fredrickson et. al.
   # exclude_smoke=TRUE, see below)
@@ -375,24 +612,34 @@ do_tests <- function(dt,which_file,niter=2000, exclude_smoke=FALSE){
   ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
   xcols <- get_xcols()
   
-  permutation_test_anderson(dt,xcols,ycols,niter=niter,write_it=TRUE,fn=paste(which_file,'.permutation.txt',sep=''))
-
-  #gls permutation
-  zcols <- c('zhedonia','zeudaimonia')
-  permutation_gls(dt,xcols=xcols,ycols=ycols,zcols=zcols,niter=101,do_obs=TRUE,write_it=TRUE,fn=paste(which_file,'.permutation.gls',sep=''))
-  
-  #gls permutation on individual measures of happiness
-  zcols <- c('zhedonia','zeudaimonia')
-  happy <- 'zeudaimonia' # limit analysis to zcols
-  red_xcols <- setdiff(xcols,setdiff(zcols,happy)) # remove the other happy from xcols
-  permutation_gls(dt,xcols=red_xcols,ycols=ycols,zcols=happy,niter=80,do_obs=FALSE,write_it=TRUE,fn=paste(paste(happy,which_file,sep=''),'.permutation.gls',sep=''))
-  
-  # note that in FRED13, smoke has only 6/77 scored as 1 and some bootstraps will entirely miss this so
+  # note that in FRED13, smoke has only 6/77 scored as 1 and some bootstraps will entirely miss this. I deal with this by excluding smoke from xcols in the bootstrap samples with fewer than 2 smoke=1
   if(exclude_smoke==TRUE){xcols <- setdiff(xcols,'smoke')}
-  bootstrap_test(dt,xcols.boot,ycols,niter=niter,write_it=TRUE, fn=paste(which_file,'.bootstrap.txt',sep=''))
+  bootstrap_test(dt,xcols,ycols,niter=niter,write_it=TRUE, fn=paste(which_file,'.bootstrap.txt',sep=''))
   
 }
 
+
+do_gls_tests <- function(dt,which_file,method='lme',niter=101){
+  # dt is a data.table of the responses and regressors
+  # which_file is the file FRED13 or FRED15 Fredrickson et. al.
+  # exclude_smoke=TRUE, see below)
+  
+  # get xcols and ycols
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  xcols <- get_xcols()
+  
+  #gls permutation
+  zcols <- c('zhedonia','zeudaimonia')
+  permutation_gls(dt,xcols=xcols,ycols=ycols,zcols=zcols,method=method,niter=niter,do_obs=TRUE,write_it=TRUE,fn=paste(which_file,'.permutation.',method,sep=''))
+  
+  #gls permutation on individual measures of happiness
+#  zcols <- c('zhedonia','zeudaimonia')
+#  happy <- 'zeudaimonia' # limit analysis to zcols
+#  red_xcols <- setdiff(xcols,setdiff(zcols,happy)) # remove the other happy from xcols
+#  permutation_gls(dt,xcols=red_xcols,ycols=ycols,zcols=happy,niter=80,do_obs=FALSE,write_it=TRUE,fn=paste(paste(happy,which_file,sep=''),'.permutation.gls',sep=''))
+  
+}
 
 get_xcols <- function(){
   # These are the regressors
@@ -423,20 +670,6 @@ ifn_genes <- function(){
   # 31 genes involved in type I IFN responses, which are down-regulated on average in the CTRA
   ifn <- c('GBP1', 'IFI16', 'IFI27', 'IFI27L1', 'IFI27L2', 'IFI30', 'IFI35', 'IFI44', 'IFI44L', 'IFI6', 'IFIH1', 'IFIT1', 'IFIT2', 'IFIT3', 'IFIT5', 'IFIT1L', 'IFITM1', 'IFITM2', 'IFITM3', 'IFITM4P', 'IFITM5', 'IFNB1', 'IRF2', 'IRF7', 'IRF8', 'MX1', 'MX2', 'OAS1', 'OAS2', 'OAS3', 'OASL')
   return(ifn)
-}
-
-expression_coefficient <- function(ycols){
-  # cc is the contrast coefficient (-1 or 1) set in original paper
-  # 19 proinflammatory genes, which are up-regulated on average in the CTRA
-
-  p <- length(ycols)
-  if(p==53){year <- 2013}else{year <- 2015}
-  cc <- rep(1.0, p)
-  pro_inflam <- pro_inflam_genes(year)
-  for(j in 1:length(ycols)){
-    if(ycols[j] %in% pro_inflam){cc[j] <- 1}else{cc[j] <- -1}
-  }
-  return(cc)
 }
 
 
@@ -470,6 +703,28 @@ coeff_vector <- function(dt,xcols,ycols){
   return(coeff_table)
 }
 
+get_ols_table <- function(cc, which_file){
+  # cc input are contrast coefficients
+  # returns mean beta and SE and CIs
+  if('IL6' %in% colnames(cc)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  b_table <- copy(cc)
+  b_table[, beta:=apply(.SD,1,mean),.SDcols=ycols]
+  means <- cbind(b_table[Type=='hedonic',.(data,hedonic=beta)], b_table[Type=='eudaimonic',.(eudaimonic=beta)])
+  means[, delta:=hedonic-eudaimonic]
+  beta_bar <- apply(means[data=='obs', .SD, .SDcols=c('hedonic','eudaimonic','delta')],2,mean) # using apply because it returns the correct format
+  beta_se <- apply(means[, .SD, .SDcols=c('hedonic','eudaimonic','delta')],2,sd)
+  beta_ci <- apply(means[, .SD, .SDcols=c('hedonic','eudaimonic','delta')],2,quantile, probs=c(0.025,0.975))
+  ols_table <- data.table(
+    Type=c('zhedonia','zeudaimonia','delta'),
+    Data=which_file,
+    beta=beta_bar,
+    SE=beta_se,
+    lwr=beta_ci['2.5%',],
+    upr=beta_ci['97.5%',]
+  )
+   return(ols_table)
+}
 
 permutation_test <- function(dt,res,xcols,ycols,niter=1000, write_it=FALSE,fn){
   # permutation test of delta - the mean difference between hed and eud coeffs
@@ -504,27 +759,33 @@ permutation_test <- function(dt,res,xcols,ycols,niter=1000, write_it=FALSE,fn){
   return(NULL)
 }
 
-permutation_test_anderson <- function(dt,xcols,ycols,niter=1000, write_it=FALSE,fn){
+permutation_test_anderson <- function(dt,xcols,ycols,niter=1000, write_it=FALSE,fn, multi=FALSE){
   # permutation test based on Anderson and Robinson 2001
   # dt is a data.table with the X regressors and Y responses
   # xcols are the regressors
   # ycols are the responses
   # fn is the file name to write to
+  # multi: if TRUE then do GLH tests
   # notes: the expected association between permuted hedonic score and gene expression is zero so the expected delta is zero E(E(b.h)-E(b.e))=0-0.
   
+  # returns two different results
+  # bmatrix is a matrix of the 53 coefficients for each permuation (observed in row I=1)
+
   p <- length(ycols)
-  Y <- as.matrix(dt[,.SD,.SDcols=ycols])
+  Y <- scale(as.matrix(dt[, .SD, .SDcols=ycols]))
+  dt[,zhedonia:=scale(zhedonia)]
+  dt[,zeudaimonia:=scale(zeudaimonia)]
   
-  # coefficients (save t-value instead of coefficients)
+  # coefficients (save t-value in addition to coefficients)
   coeffs.hed <- matrix(0,nrow=niter,ncol=p)
   coeffs.eud <- matrix(0,nrow=niter,ncol=p)
-  
-  # wilks GLH result
-  dt.cc <- contrast_coefficients(copy(dt)) # need to do this on the reversed expression levels because I cannot reverse the coefficients later
-  wilks_matrix <- matrix(0,nrow=niter,ncol=3) # matrix of Wilk's Lambda
-  colnames(wilks_matrix) <- c('zhedonia=0','zeudaimonia=0','delta=0')
+  colnames(coeffs.hed) <- ycols
+  colnames(coeffs.eud) <- ycols
+  t.hed <- matrix(0,nrow=niter,ncol=p)
+  t.eud <- matrix(0,nrow=niter,ncol=p)
+  colnames(t.hed) <- ycols
+  colnames(t.eud) <- ycols
 
-    
   zcols <- c('zhedonia','zeudaimonia')
   xcols2 <- setdiff(xcols, zcols)
   # Get residuals from X (so excluding zhedonia and zeudaimonia)
@@ -534,6 +795,7 @@ permutation_test_anderson <- function(dt,xcols,ycols,niter=1000, write_it=FALSE,
   rows <- 1:nrow(dt) # observed on first iter and permuted after
   for(iter in 1:niter){
     e <- residuals(fit.obs)[rows,] # permuted Yhat - aX
+    # yhat is that predicted by xcols2, e contains the residual or unpredicted or what is left to be predicted by zhedonia and zeudaimonia. So permute e and there should be no expected correlation between happiness and ypi.
     Ypi <- yhat + e # if iter=1 then ypi=y, otherwise permuted
     form <- formula(paste('Ypi',paste(xcols,collapse='+'),sep='~'))
     fitmv.pi <- lm(form, data=dt)
@@ -545,40 +807,31 @@ permutation_test_anderson <- function(dt,xcols,ycols,niter=1000, write_it=FALSE,
     
     ss <- summary(fitmv.pi)
     for(j in 1:p){ # save t-values instead of coefficients
-      coeffs.hed[iter,j] <- ss[[paste('Response ',ycols[j],sep='')]]$coefficients['zhedonia', "t value"]
-      coeffs.eud[iter,j] <- ss[[paste('Response ',ycols[j],sep='')]]$coefficients['zeudaimonia', "t value"]
+      coeffs.hed[iter,j] <- ss[[paste('Response ',ycols[j],sep='')]]$coefficients['zhedonia', "Estimate"]
+      coeffs.eud[iter,j] <- ss[[paste('Response ',ycols[j],sep='')]]$coefficients['zeudaimonia', "Estimate"]
+      t.hed[iter,j] <- ss[[paste('Response ',ycols[j],sep='')]]$coefficients['zhedonia', "t value"]
+      t.eud[iter,j] <- ss[[paste('Response ',ycols[j],sep='')]]$coefficients['zeudaimonia', "t value"]
     }
 
-    # do wilks on reversed Y
-    form <- formula(paste('Y',paste(xcols2,collapse='+'),sep='~'))
-    fitmv <- lm(form, data=dt.cc)
-    yhat <- predict(fitmv) # Yhat = aX
-    e <- residuals(fitmv)[rows,] # permuted Yhat - aX
-    Ypi <- yhat + e
-    form <- formula(paste('Ypi',paste(xcols,collapse='+'),sep='~'))
-    fitmv.pi <- lm(form, data=dt.cc)
-    glh <- linearHypothesis(fitmv.pi, "zhedonia = 0")
-    wilks.zhed <- det(glh$SSPE)/det(glh$SSPE + glh$SSPH) 
-    glh <- linearHypothesis(fitmv.pi, "zeudaimonia = 0")
-    wilks.zeud <- det(glh$SSPE)/det(glh$SSPE + glh$SSPH) 
-    glh <- linearHypothesis(fitmv.pi, "zeudaimonia = zhedonia")
-    wilks.delta <- det(glh$SSPE)/det(glh$SSPE + glh$SSPH) 
-    wilks_matrix[iter,] <- c(wilks.zhed,wilks.zeud,wilks.delta)
-    
     # permute rows
     rows <- sample(1:nrow(dt))
   }
   
-  b_matrix <- data.table(I=rep(1:niter,2), Type=rep(c('hedonic','eudaimonic'),each=niter), rbind(coeffs.hed,coeffs.eud))
+  # matrix of regression coefficients for each gene
+  b_table <- data.table(I=rep(1:niter,2), data=rep(c('obs',rep('perm',niter-1)),2), Type=rep(c('hedonic','eudaimonic'),each=niter), rbind(coeffs.hed,coeffs.eud))
+  # matrix of regression t stats for each gene
+  t_table <- data.table(I=rep(1:niter,2), data=rep(c('obs',rep('perm',niter-1)),2), Type=rep(c('hedonic','eudaimonic'),each=niter), rbind(t.hed,t.eud))
+   
+  fn1 <- paste('coeff.',fn,sep='')
+  if(write_it==TRUE){write.table(b_table,fn1,quote=FALSE,sep='\t',row.names=FALSE)}
+  fn2 <- paste('t.',fn,sep='')
+  if(write_it==TRUE){write.table(t_table,fn2,quote=FALSE,sep='\t',row.names=FALSE)}
   
-  if(write_it==TRUE){write.table(b_matrix,fn,quote=FALSE,sep='\t',row.names=FALSE)}
-  fn <- paste('wilks.',fn,sep='')
-  if(write_it==TRUE){write.table(wilks_matrix,fn,quote=FALSE,sep='\t',row.names=FALSE)}
-  
+
   return(NULL)
 }
 
-permutation_gls <- function(dt,xcols,ycols,zcols=c('zhedonia','zeudaimonia'),niter=100,do_obs=TRUE,write_it=FALSE,fn){
+permutation_gls <- function(dt, xcols,ycols, zcols=c('zhedonia','zeudaimonia'), method='gls', niter=100, do_obs=TRUE, write_it=FALSE, fn){
   # hybrid of permutation_anderson and gls_with_correlated_error
   # basically use the permuted data to get a null distribution of b_hedonia and b_zeudaimonia
   
@@ -589,7 +842,7 @@ permutation_gls <- function(dt,xcols,ycols,zcols=c('zhedonia','zeudaimonia'),nit
   
   # create matrix with scaled y
   #y.scale <- scale(dt[,.SD,.SDcols=ycols])
-  Y <- scale(contrast_coefficients(dt[,.SD,.SDcols=ycols]))
+  Y <- scale(dt[,.SD,.SDcols=ycols])
   dt <- cbind(dt[,.SD,.SDcols=xcols],Y)
   dt[,subject:=factor(.I)]
   
@@ -599,22 +852,21 @@ permutation_gls <- function(dt,xcols,ycols,zcols=c('zhedonia','zeudaimonia'),nit
   form <- formula(paste('Y',paste(xcols2,collapse='+'),sep='~'))
   fit.obs <- lm(form, data=dt)
   yhat <- predict(fit.obs) # Yhat = aX
-  if(do_obs==TRUE){
-    rows <- 1:nrow(dt) # observed on first iter and permuted after
-  }else{
-    rows <- sample(1:nrow(dt))
-  }
-  
-  # coefficients (save t-value in addition to coefficients)
-  b_matrix <- matrix(0,nrow=niter,ncol=2*length(zcols))
-  #colnames(b_matrix) <- c('coeff.zhedonia','coeff.zeudaimonia','t.zhedonia','t.zeudaimonia')
-  colnames(b_matrix) <- c(paste('coeff',zcols,sep='.'),paste('t',zcols,sep='.'))
+  rows <- 1:nrow(dt) # observed on first iter and permuted after
 
+  # coefficients (save t-value in addition to coefficients)
+  b_matrix <- matrix(0,nrow=niter,ncol=3*length(zcols))
+  #colnames(b_matrix) <- c('coeff.zhedonia','coeff.zeudaimonia','t.zhedonia','t.zeudaimonia')
+  colnames(b_matrix) <- c(paste('coeff',zcols,sep='.'),paste('t',zcols,sep='.'),paste('p',zcols,sep='.'))
+  
+  #gee table added
+  gee_perm_table <- data.table(NULL)
+  samp <- 'obs'
 
   code <- sample(LETTERS,4,replace=TRUE)
   fn_full <- paste(fn,'.',paste(code,collapse=''),'.txt',sep='')
   fn_temp <- paste(fn,'.',paste(code,collapse=''),'.temp.txt',sep='')
-  
+  fn_gee <- paste(fn,'.',paste(code,collapse=''),'.gee.txt',sep='')
   
   for(iter in 1:niter){
     e <- residuals(fit.obs)[rows,] # permuted Yhat - aX
@@ -626,38 +878,218 @@ permutation_gls <- function(dt,xcols,ycols,zcols=c('zhedonia','zeudaimonia'),nit
     # wide to long
     dtlong <- melt(dt,id.vars=c('subject',xcols),variable.name='gene',value.name='expression')
     dtlong[,gene:=factor(gene)]
+    dtlong <- orderBy(~subject + gene, dtlong)
     
     # this replicates the analysis of Fredrickson et al.
     form <- formula(paste('expression~',paste(c('gene',xcols),collapse='+'),sep=''))
-    fit1 <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
+    if(method=='gls'){
+      fit1 <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
+    }
+    if(method=='lme'){
+      fit1 <- lme(form, random = ~1|subject, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=lmeControl(maxIter=100, msMaxIter = 500, tolerance=1e-6, msVerbose = FALSE)) # tolerance=1e-6 default
+      #summary(fit1)$tTable[zcols,]
+    }
+    if(method=='lmer'){
+      form3 <- formula(paste('expression~',paste(xcols,collapse='+'),'+(1|subject) + (1|gene)',sep=''))
+      fit1 <- lmer(form3, data=dtlong, REML=FALSE) # tolerance=1e-6 default
+      #summary(fit1)$tTable[zcols,]
+    }
+    if(method=='gee'){
+      fit.geeglm <- geeglm(form, family=gaussian, data=dtlong,id=subject,waves=gene, corstr='exchangeable', std.err="san.se")
+      estimate <- summary(fit.geeglm)$coefficients[zcols,'Estimate']
+      names(estimate) <- zcols
+      gee_perm_table <- rbind(gee_perm_table,data.table(samp=samp,t(estimate)))
+    }
     b_matrix[iter,] <- c(
       summary(fit1)$tTable[zcols,'Value'],
-      summary(fit1)$tTable[zcols,'t-value'])
-    # zhedonia     0.02490  0.127834  0.194792  0.8456
-    # zeudaimonia -0.19396  0.131233 -1.478016  0.1395
+      summary(fit1)$tTable[zcols,'t-value'],
+      summary(fit1)$tTable[zcols,'p-value']
+    )
 
     # permute rows for next iteration
     rows <- sample(1:nrow(dt))
+    samp <- 'perm'
     
     # partial writing so I can check results
-    write.table(b_matrix,fn_temp,quote=FALSE,row.names = FALSE)
+    if(method!='gee'){write.table(b_matrix,fn_temp,quote=FALSE,row.names = FALSE)}
   }
   
-  if(do_obs==TRUE){
-    b_matrix <- data.table(permutation=c('obs',rep('perm',niter-1)),b_matrix)
-  }else{
-    b_matrix <- data.table(permutation=rep('perm',niter),b_matrix)
-  }
+  b_matrix <- data.table(permutation=c('obs',rep('perm',niter-1)),b_matrix)
   # re-write with permutation column
-  write.table(b_matrix,fn_full,quote=FALSE,row.names = FALSE)
+  if(method!='gee'){write.table(b_matrix,fn_full,quote=FALSE,row.names = FALSE)}
+  if(method=='gee'){write.table(gee_perm_table,fn_gee,quote=FALSE,row.names=FALSE,sep='\t')}
   return(NULL)
+}
+
+bootstrap_obrien <- function(dt,fn, niter=200,initer=1000){
+  #initer is the inner bootstrap iteration to get the error on the correlation among the beta coefficients
+  # iter is the outer iteration for bootstrap
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  xcols <- get_xcols()
+  zcols <- c('zhedonia','zeudaimonia')
+  xcols2 <- setdiff(xcols, zcols)
+  N <- nrow(dt)
+  p <- length(ycols)
+  J <- matrix(1,nrow=p,ncol=1)
+  tJ <- t(J)
+  Bhed <- matrix(0,nrow=initer,ncol=p)
+  Beud <- matrix(0,nrow=initer,ncol=p)
+  Bdelta <- matrix(0,nrow=initer,ncol=p)
+  Ttable <- data.table(NULL)
+  Y <- dt[,.SD, .SDcols=ycols] # Y is rescaled in the loop
+  rows <- 1:N # observed on first iter and permuted after
+  for(iter in 1:niter){
+    # don't need to rescale these at this point because they will be rescaled in the inner loop
+    Ysamp <- Y[rows,]
+    dt.samp <- dt[rows,]
+    # beta for each iteration is the first row in the inner loop
+    irows <- 1:nrow(dt) # observed on first iter and permuted after
+    # now resample dt and Ypi many time
+    for(iiter in 1:initer){
+      Y.insamp <- scale(Ysamp[irows,])
+      dt.insamp <- dt.samp[irows,]
+      dt.insamp[, zhedonia:=scale(zhedonia)]
+      dt.insamp[, zeudaimonia:=scale(zeudaimonia)]
+      smoke <- dt.insamp[,smoke]
+      if(length(which(smoke==1))<2){txcols <- setdiff(xcols,'smoke')}else{txcols<- xcols}
+      form <- formula(paste('Y.insamp',paste(txcols,collapse='+'),sep='~'))
+      fitmv.pi <- lm(form, data=dt.insamp)
+      # these need to be the t-value not the coefficient
+      Bhed[iiter,] <- coefficients(fitmv.pi)['zhedonia',]
+      Beud[iiter,] <- coefficients(fitmv.pi)['zeudaimonia',]
+      Bdelta[iiter,] <- coefficients(fitmv.pi)['zhedonia',] - coefficients(fitmv.pi)['zeudaimonia',]
+      irows <- sample(1:N, replace=TRUE)
+    }
+    R <- cor(Bhed)
+    num <- tJ%*%Bhed[1,]
+    denom <- c(sqrt(tJ%*%R%*%J))
+    Thed <- c(num/denom)
+    R <- cor(Beud)
+    num <- tJ%*%Beud[1,]
+    denom <- c(sqrt(tJ%*%R%*%J))
+    Teud <- c(num/denom)
+    R <- cor(Bdelta)
+    num <- tJ%*%Bdelta[1,]
+    denom <- c(sqrt(tJ%*%R%*%J))
+    Tdelta <- c(num/denom)
+    Ttable <- rbind(Ttable,data.table(Thed=Thed,Teud=Teud,Tdelta=Tdelta))
+    rows <- sample(1:N, replace=TRUE)
+  }
+  code <- sample(LETTERS,4,replace=TRUE)
+  code <- 'boot'
+  fn_full <- paste(fn,'.',paste(code,collapse=''),'.txt',sep='')
+  write.table(Ttable,fn_full,quote=FALSE,sep='\t',row.names=FALSE)
+}
+
+permutation_obrien <- function(dt,fn, niter=200,initer=1000){
+  # returns the null distribution for O'Brien's T
+  #initer is the inner bootstrap iteration to get the error on the correlation among the beta coefficients
+  # iter is the outer iteration for permutation
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  xcols <- get_xcols()
+  zcols <- c('zhedonia','zeudaimonia')
+  xcols2 <- setdiff(xcols, zcols)
+  N <- nrow(dt)
+  p <- length(ycols)
+  J <- matrix(1,nrow=p,ncol=1)
+  tJ <- t(J)
+  Bhed <- matrix(0,nrow=initer,ncol=p)
+  Beud <- matrix(0,nrow=initer,ncol=p)
+  Bdelta <- matrix(0,nrow=initer,ncol=p)
+  t.hed <- numeric(p)
+  t.eud <- numeric(p)
+  t.delta <- numeric(p)
+  Ttable <- data.table(NULL)
+  Y <- scale(dt[,.SD, .SDcols=ycols])
+  dts <- copy(dt)
+  dts[, zhedonia:=scale(zhedonia)]
+  dts[, zeudaimonia:=scale(zeudaimonia)]
+  # predicted and residuals for all X other than zcols
+  form <- formula(paste('Y',paste(xcols2,collapse='+'),sep='~'))
+  fit.obs <- lm(form, data=dts)
+  yhat <- predict(fit.obs) # Yhat = aX
+  rows <- 1:N # observed on first iter and permuted after
+  for(iter in 1:niter){
+    e <- residuals(fit.obs)[rows,] # permuted Yhat - aX
+    # yhat is that predicted by xcols2, e contains the residual or unpredicted or what is left to be predicted by zhedonia and zeudaimonia. So permute e and there should be no expected correlation between happiness and ypi.
+    Ypi <- yhat + e # if iter=1 then ypi=y, otherwise permuted
+    irows <- 1:nrow(dt) # observed on first iter and permuted after
+    # now resample dt and Ypi many time
+    for(iiter in 1:initer){
+      Yp.samp <- scale(Ypi[irows,])
+      dt.samp <- dts[irows,]
+      dt.samp[, zhedonia:=scale(zhedonia)]
+      dt.samp[, zeudaimonia:=scale(zeudaimonia)]
+      smoke <- dt.samp[,smoke]
+      if(length(which(smoke==1))<2){txcols <- setdiff(xcols,'smoke')}else{txcols<- xcols}
+      form <- formula(paste('Yp.samp',paste(txcols,collapse='+'),sep='~'))
+      fitmv.pi <- lm(form, data=dt.samp)
+      Bhed[iiter,] <- coefficients(fitmv.pi)['zhedonia',]
+      Beud[iiter,] <- coefficients(fitmv.pi)['zeudaimonia',]
+      Bdelta[iiter,] <- coefficients(fitmv.pi)['zhedonia',] - coefficients(fitmv.pi)['zeudaimonia',]
+      if(iiter==1){
+        ss <- summary(fitmv.pi)
+        for(j in 1:p){ # save t-values instead of coefficients
+          t.hed[j] <- ss[[paste('Response ',ycols[j],sep='')]]$coefficients['zhedonia', "t value"]
+          t.eud[j] <- ss[[paste('Response ',ycols[j],sep='')]]$coefficients['zeudaimonia', "t value"]
+          t.delta[j] <- ss[[paste('Response ',ycols[j],sep='')]]$coefficients['zhedonia', "t value"] - ss[[paste('Response ',ycols[j],sep='')]]$coefficients['zeudaimonia', "t value"]
+        }
+      }
+      irows <- sample(1:N, replace=TRUE)
+    }
+    R <- cor(Bhed)
+    num <- sum(t.hed)
+    denom <- sqrt(sum(R)) # c(sqrt(tJ%*%R%*%J))
+    Thed <- c(num/denom)
+    R <- cor(Beud)
+    num <- sum(t.eud)
+    denom <- sqrt(sum(R)) # c(sqrt(tJ%*%R%*%J))
+    Teud <- c(num/denom)
+    R <- cor(Bdelta)
+    num <- sum(t.delta)
+    denom <- sqrt(sum(R)) # c(sqrt(tJ%*%R%*%J))
+    Tdelta <- c(num/denom)
+    Ttable <- rbind(Ttable,data.table(Thed=Thed,Teud=Teud,Tdelta=Tdelta))
+    rows <- sample(1:N, replace=TRUE)
+  }
+  code <- sample(LETTERS,4,replace=TRUE)
+  code <- 'perm'
+  fn_full <- paste(fn,'.',paste(code,collapse=''),'.txt',sep='')
+  write.table(Ttable,fn_full,quote=FALSE,sep='\t',row.names=FALSE)
+}
+
+
+roast_it <- function(dt){
+  # Roast
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  xcols <- get_xcols()
+  Y <- scale(dt[, .SD, .SDcols=ycols])
+  dt[,zhedonia:=scale(zhedonia)]
+  dt[,zeudaimonia:=scale(zeudaimonia)]
+  Yt <- t(Y)
+  form <- formula(paste('~',paste(xcols,collapse='+'),sep=''))
+  design <- model.matrix(form, data=dt)
+  cont.matrix <- makeContrasts(delta="zhedonia-zeudaimonia",levels=design)
+  hedonia <- which(colnames(design)=='zhedonia')
+  eudaimonia <- which(colnames(design)=='zeudaimonia')
+  phed <- roast(y=Yt,design=design,contrast=hedonia, nrot=1999)
+  peud <- roast(y=Yt,design=design,contrast=eudaimonia, nrot=1999)
+  pdelta <- roast(y=Yt,design=design,contrast=cont.matrix, nrot=1999)  
+  
+  
+  p.roast <- c(zhedonia=phed$p.value['UpOrDown','P.Value'], zeudaimonia=peud$p.value['UpOrDown','P.Value'], delta=pdelta$p.value['UpOrDown','P.Value'])
+  return(p.roast)
+  
 }
 
 convert_gls_temp_file <- function(){
   # some of the gls permutation runs failed to converge and the function ended before completion so this function is converting the temp file to the final file
-  fn <- 'zeudaimoniaFRED15.permutation.gls.ISQF.temp.txt'
-  fn_out <- 'zeudaimoniaFRED15.permutation.gls.ISQF.txt'
-  do_obs <- FALSE
+  fn <- 'FRED13.permutation.gls.KJBH.temp.txt'
+  fn_out <- 'FRED13.permutation.gls.KJBH.txt'
+  do_obs <- TRUE
   b_matrix <- read.table(fn, header=TRUE)
   niter <- nrow(b_matrix)
   if(do_obs==TRUE){
@@ -670,7 +1102,8 @@ convert_gls_temp_file <- function(){
 }
 
 bootstrap_test <- function(dt,xcols,ycols,niter=1000, write_it=FALSE, fn){
-# bootstrap 95% CI on delta - the mean difference between hed and eud coeffs
+# resamples dt and computes the standardized beta of zhedonia and zeudaimonia
+# first row is observed data
 # dt is the data.table of X regressors and Y responses
 # res is the resulting coefficients of the regression
 # xcols are the regressors
@@ -684,17 +1117,39 @@ bootstrap_test <- function(dt,xcols,ycols,niter=1000, write_it=FALSE, fn){
 
   rows <- 1:nrow(dt) # observed on first iter and permuted after
   for(iter in 1:niter){
-    form <- formula(paste('Y',paste(xcols,collapse='+'),sep='~'))
-    Y <- as.matrix(dt[rows, .SD, .SDcols=ycols])
-    fitmv <- lm(form, data=dt[rows,])
+    Y <- scale(as.matrix(dt[rows, .SD, .SDcols=ycols]))
+    dts <- dt[rows,]
+    dts[,zhedonia:=scale(zhedonia)]
+    dts[,zeudaimonia:=scale(zeudaimonia)]
+    # if too few cases with smoke=1 then drop it
+    smoke <- dts[,smoke]
+    if(length(which(smoke==1))<2){txcols <- setdiff(xcols,'smoke')}else{txcols<- xcols}
+    form <- formula(paste('Y',paste(txcols,collapse='+'),sep='~'))
+    fitmv <- lm(form, data=dts[,.SD,.SDcols=txcols])
     hed_matrix[iter,] <- coefficients(fitmv)['zhedonia',]
     eud_matrix[iter,] <- coefficients(fitmv)['zeudaimonia',]
     rows <- sample(1:nrow(dt),replace=TRUE)
   }
-  b_matrix <- data.table(I=rep(1:niter,2), Type=rep(c('hedonic','eudaimonic'),each=niter), rbind(hed_matrix,eud_matrix))
+  b_matrix <- data.table(I=rep(1:niter,2), data=rep(c('obs',rep('resamp',niter-1)),2), Type=rep(c('hedonic','eudaimonic'),each=niter), rbind(hed_matrix,eud_matrix))
   
   if(write_it==TRUE){write.table(b_matrix,fn,quote=FALSE,sep='\t',row.names=FALSE)}
   return(NULL)
+}
+
+wald_test <- function(x,se){
+  pchisq(x^2/se^2, 1, ncp = 0, lower.tail = FALSE, log.p = FALSE)
+}
+
+gee_delta <- function(gee_res){
+  # given the two estimates in est and the SEs of the estimates in se,
+  # this computes the SE, Wald, and p-value of the difference in the estimates
+  delta <- gee_res["zhedonia",'Estimate'] - gee_res["zeudaimonia",'Estimate']
+  delta.se <- sqrt(sum(gee_res[,'Std.err']^2))
+  delta.wald <- delta^2/delta.se^2
+  delta.p <- pchisq(delta.wald, 1, ncp = 0, lower.tail = FALSE, log.p = FALSE)
+  gee_res <- rbind(gee_res,c(delta,delta.se,delta.wald,delta.p))
+  row.names(gee_res)[3] <- 'delta'
+  return(gee_res)
 }
 
 contrast_coefficients <- function(dt){
@@ -702,7 +1157,6 @@ contrast_coefficients <- function(dt){
   # compute contrast coefficients AND compute mean of these
   if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
   ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
-  # cc <- expression_coefficient(ycols) # not needed
   rev_ycols <- c(antibody_genes(),ifn_genes())
   dt[,(rev_ycols):=lapply(.SD,"*",-1),.SDcols=rev_ycols]
   return(dt)
@@ -795,21 +1249,24 @@ permutation.gls.p.value <- function(res, statistic='t',do_ci=FALSE){
   return(p.value)
 }
 
-type.1.error <- function(x){
+
+type.1.error <- function(x, alpha=0.05){
   # obs statistic must be in first cell
   # usage:  t <- apply(res, 2, type.1.error)
-  return(length(which(x <= 0.05))/length(x))
+  return(length(which(x <= alpha))/length(x))
 }
 
-effect_size <- function(res){
+effect_size <- function(dt){
+  # fit the UNstandardized Y
   # change in mean expression give 4sd change in hedonic score
-  # recover numbers from Fredericksonddd
-  if('IL6' %in% colnames(res)){year <- 2013}else{year <- 2015}
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
   ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
-  obs <- t(as.matrix(res[I==1,.SD, .SDcols=ycols]))
-  obs2 <- (2^(4*apply(obs,2,mean)) - 1)*100
-  
-  names(obs2) <- c('zhedonia','zeudaimonia')
+  xcols <- get_xcols()
+  Y <- as.matrix(dt[, .SD, .SDcols=ycols])
+  form <- formula(paste('Y',paste(xcols,collapse='+'),sep='~'))
+  fitmv <- lm(form, data=dt[,.SD,.SDcols=xcols])
+  coeffs <- data.table(zhedonia=coefficients(fitmv)['zhedonia',], zeudaimonia=coefficients(fitmv)['zeudaimonia',])
+  obs2 <- (2^(4*apply(coeffs,2,mean)) - 1)*100
   return(obs2)
 }
 
@@ -829,9 +1286,8 @@ GLH <- function(dt, explore_it=FALSE){
   ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
   xcols <- get_xcols()
   Y <- as.matrix(dt[,.SD,.SDcols=ycols])
-  dt.cc <- contrast_coefficients(copy(dt))
   form <- formula(paste('Y',paste(xcols,collapse='+'),sep='~'))
-  fitmv <- lm(form, data=dt.cc)
+  fitmv <- lm(form, data=dt)
   GLH1 <- linearHypothesis(fitmv, "zhedonia = 0", test='Pillai') #
   GLH2 <- linearHypothesis(fitmv, "zeudaimonia = 0", test='Pillai')
   GLH3 <- linearHypothesis(fitmv, "zhedonia = zeudaimonia", test='Pillai')
@@ -846,8 +1302,7 @@ GLH <- function(dt, explore_it=FALSE){
     fit <- eigen(cov(Y))
     pc1 <- Y%*%fit$vectors[,1]
     summary(lm(pc1~Xobs))
-    dt.cc <- contrast_coefficients(copy(dt))
-    fitmvr <- lm(form, data=dt.cc)
+    fitmvr <- lm(form, data=dt)
     GLH1r <- linearHypothesis(fitmvr, "zhedonia = 0")
     GLH2r <- linearHypothesis(fitmvr, "zeudaimonia = 0")
     GLH3r <- linearHypothesis(fitmvr, "zhedonia = zeudaimonia")
@@ -876,55 +1331,37 @@ GLH <- function(dt, explore_it=FALSE){
   return(list(GLH1=GLH1, GLH2=GLH2, GLH3=GLH3))
 }
 
-smart_t_stats <- function(cc){
-  # cc must be the contrast coefficients and not raw regression coefficients
-  if('IL6' %in% colnames(cc)){year <- 2013}else{year <- 2015}
-  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
-  cc[,ME:=apply(.SD,1,mean),.SDcols=ycols, by=Type]
-  
-  # naive bootstrap t-test
-  y <- as.numeric(cc[1,.SD, .SDcols=ycols])
-  p <- length(y)
-  ybar <- numeric(200)
-  for(iter in 1:200){
-    ybar[iter] <- mean(y[sample(1:p, replace=TRUE)])
-  }
-  se.naive <- sd(ybar)
-  
-  me <- cc[I==1,ME,by=Type] # observed values
-  se <- cc[,.(se=sd(ME)),by=Type] # about 10X higher than naive SE
-  t.table <- merge(me,se,by='Type')
-  t.table[, t:=abs(ME)/se]
-  t.table[, p.value := 2*pt(t,df=(p-1),lower.tail = FALSE)]
-  delta <- me[Type=='hedonic',ME] - me[Type=='eudaimonic',ME]
-  delta.se <- sqrt(se[Type=='hedonic',se]^2 + se[Type=='eudaimonic',se]^2)
-  delta.t <- abs(delta)/delta.se
-  delta.p <- 2*pt(delta.t,df=(p-1),lower.tail = FALSE)
-  t.table <- rbind(t.table, data.table(Type='delta',ME=delta,se=delta.se,t=delta.t, p.value=delta.p))
-  return(t.table)
+gls_type_I_error <- function(df,res){
+  p.zhed <- 2*pt(abs(res[permutation=='perm',t.zhedonia]),df=df,lower.tail = FALSE)
+  p.zeud <- 2*pt(abs(res[permutation=='perm',t.zeudaimonia]),df=df,lower.tail = FALSE)
+  t1e.zhed <- type.1.error(p.zhed)
+  t1e.zeud <- type.1.error(p.zeud)
+  return(c(t1e.zhed=t1e.zhed, t1e.zeud=t1e.zeud))
 }
 
-naive_t_stats <- function(cc){
+naive_t_stats <- function(dt){
   # compute t-statistic of regulation as in Frederickson 2013
-  if('IL6' %in% colnames(cc)){year <- 2013}else{year <- 2015}
+  # fit the UNstandardized Y
+  # change in mean expression give 4sd change in hedonic score
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
   ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
-  cc[,ME:=apply(.SD,1,mean),.SDcols=ycols, by=Type]
-  
-  # y <- cc[I==1,.SD, .SDcols=ycols] # check order of hed and eud
-  
-  # transpose to get contrast coefficients in columns
-  y <- data.table(t(cc[I==1,.SD, .SDcols=ycols]))
-  setnames(y, c('zhedonia', 'zeudaimonia'))
-  p <- nrow(y)
-  
+  xcols <- get_xcols()
+  Y <- as.matrix(dt[, .SD, .SDcols=ycols])
+  form <- formula(paste('Y',paste(xcols,collapse='+'),sep='~'))
+  fitmv <- lm(form, data=dt[,.SD,.SDcols=xcols])
+  coeffs <- data.table(zhedonia=coefficients(fitmv)['zhedonia',], zeudaimonia=coefficients(fitmv)['zeudaimonia',])
+  # backtransform coeffs 
+  beta <- apply(coeffs,2,mean)
+  p <- nrow(coeffs)
   iters <- 200 # following the original
   yboot <- matrix(0,nrow=iters,ncol=2)
   rows <- 1:p
   for(iter in 1:iters){
-    yboot[iter,] <- apply(y[rows],2,mean)
+ #   yboot[iter,] <- apply(coeffs[rows,],2,mean)
+    yboot[iter,] <- (2^(4*apply(coeffs[rows,],2,mean)) - 1)*100
     rows <- sample(1:p,replace=TRUE)
   }
-  colnames(yboot) <- c('zhedonia','zeudaimonia')
+  colnames(yboot) <- colnames(coeffs)
   yboot <- data.table(yboot)
   yboot[,delta:=zhedonia-zeudaimonia]
   estimate <- as.numeric(yboot[1,])
@@ -933,10 +1370,27 @@ naive_t_stats <- function(cc){
   t <- estimate/se
   p.value <- 2*pt(abs(t),df=(p-1),lower.tail = FALSE)
   t.table <- data.table(stat=c('estimate','se','t','p.value'),rbind(estimate,se,t,p.value))
+  
+  return(t.table)
+  
+}
 
- return(t.table)
+smart_t_stats <- function(cc){
+  # cc must be the contrast coefficients and not raw regression coefficients
+  if('IL6' %in% colnames(cc)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  cc[,ME:=apply(.SD,1,mean),.SDcols=ycols, by=Type]
+  # create new table with zhedonia and zeudaimonia mean coefficients in columns
+  beta <- data.table(zhedonia=cc[Type=='hedonic',ME], zeudaimonia=cc[Type=='eudaimonic',ME])
+  beta[, delta:=zhedonia-zeudaimonia]
+  means <- unlist(beta[1,])
+  se <- apply(beta,2,sd)
+  t <- abs(means/se)
+  m <- length(ycols)
+  prob <- 2*pt(t,df=(m-1),lower.tail = FALSE)
+  return(prob)
+}
 
- }
 
 permutation_t <- function(cc,statistic='t'){
   # cc must be the contrast coefficients and not raw regression coefficients
@@ -951,30 +1405,26 @@ permutation_t <- function(cc,statistic='t'){
   delta <- cc[Type=='hedonic',ME] - cc[Type=='eudaimonic',ME]
   
   if(statistic=='mean'){
-    b.hed <- cc[Type=='hedonic', ME]
-    b.eud <- cc[Type=='eudaimonic', ME]
+    theta <- data.table(
+      zhedonia=cc[Type=='hedonic',ME],
+      zeudaimonia=cc[Type=='eudaimonic',ME],
+      delta=delta
+    )
   }
   if(statistic=='t'){
-    b.hed <- cc[Type=='hedonic', t]
-    b.eud <- cc[Type=='eudaimonic', t]
-    delta <- delta/sqrt(cc[Type=='hedonic',SD]^2/p + cc[Type=='eudaimonic',SD]^2/p)
+    theta <- data.table(
+      zhedonia=cc[Type=='hedonic',t],
+      zeudaimonia=cc[Type=='eudaimonic',t],
+      delta=delta/sqrt(cc[Type=='hedonic',SD]^2/p + cc[Type=='eudaimonic',SD]^2/p)
+      )
   }
   
-  niter <- length(b.hed)
-  
-  # is hedonic up regulated? This is two-sided despite the question
-  zhedonia <- length(which(abs(b.hed)>=abs(b.hed[1])))/niter # permutation p
-  # is eudamonic down regulated?
-  zeudaimonia <- length(which(abs(b.eud)>=abs(b.eud[1])))/niter # permutation p
-  # is there a difference in regulation?
-  delta <- length(which(abs(delta)>=abs(delta[1])))/niter # permutation p
-  res <- c(zhedonia,zeudaimonia,delta)
-  names(res) <- c('zhedonia','zeudaimonia','delta')
-  return(res)
+  ols.perm.p <- apply(abs(theta),2,permutation.p.value)
+  return(ols.perm.p)
 }
 
 permutation_lambda <- function(res){
-  # res is the table of Wilk's lambda for each iteration
+  # res is the table of Wilk's lambda or Pillai's trace for each iteration
   niter <- nrow(res)
   p_matrix <- data.table(p.hed=NA,p.eud=NA,p.delta=NA)
   
@@ -1312,34 +1762,45 @@ explore_random_response <- function(){
   cor(x1,Yres[,j])
 }
 
-gls_with_correlated_error <- function(dt){
-  # dt is a raw data set
-  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+gls_with_correlated_error <- function(dt,year=2015, fit_lme=FALSE){
+  #if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
   ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
   xcols <- get_xcols()
-
-  # create matrix with scaled y
-  #y.scale <- scale(dt[,.SD,.SDcols=ycols])
-  Y <- scale(contrast_coefficients(dt[,.SD,.SDcols=ycols]))
-  dts <- cbind(dt[,.SD,.SDcols=xcols], Y)
-  dts[,subject:=factor(.I)]
-  
-  # wide to long
-  dtlong <- melt(dts,id.vars=c('subject',xcols),variable.name='gene',value.name='expression')
-  dtlong[,gene:=factor(gene)]
+  zcols <- c('zhedonia','zeudaimonia')
+  dtlong <- get_dtlong(dt,year=year,center_Y=TRUE) # returns contrast coefficients
+  dtlong <- orderBy(~subject + gene, dtlong)
   
   # this replicates the analysis of Fredrickson et al.
   # subject is the grouping factor and this is identified in the correlation statement
   form <- formula(paste('expression~',paste(c('gene',xcols),collapse='+'),sep=''))
-  fit1 <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
-  # summary(fit1)
-  #              Value Std.Error    t-value p-value
-  # zhedonia     0.08575  0.122458   0.700267  0.4838
-  # zeudaimonia -0.51069  0.125713  -4.062329  0.0000
-  
+  if(fit_lme==FALSE){
+    fit1 <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
+  }
+  if(fit_lme==TRUE){
+    fit1 <- lme(form, random = ~1|subject, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=lmeControl(maxIter=100, msMaxIter = 500, tolerance=1e-6, msVerbose = FALSE)) # tolerance=1e-6 default
+  }
+
   return(fit1)
 }
 
+gee_with_correlated_error <- function(dt){
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  xcols <- get_xcols()
+  zcols <- c('zhedonia','zeudaimonia')
+  dtlong <- get_dtlong(dt,year=year,center_Y=TRUE) # returns contrast coefficients
+  dtlong <- orderBy(~subject + gene, dtlong)
+  form <- formula(paste('expression~',paste(c('gene',xcols),collapse='+'),sep=''))
+  # check out interaction
+  # form <- formula(paste('expression~',paste(c('gene',xcols,paste(zcols,collapse=':')),collapse='+'),sep=''))
+  fit.geeglm <- geeglm(form, family=gaussian, data=dtlong,id=subject,waves=gene, corstr='exchangeable', std.err="san.se")
+  #fit.gls <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
+  sum.lm <- summary(lm(form,data=dtlong))$coefficients[zcols,]
+  sum.gee <- summary(fit.geeglm)$coefficients[zcols,]
+  #sum.gls <- summary(fit.gls)$tTable[zcols,]
+  #res <- rbind(sum.lm, sum.gee)
+  return(sum.gee)
+}
 
 explore_gls_with_correlated_error <- function(){
   # note that this replicates Fredrickson 2015
@@ -1351,6 +1812,7 @@ explore_gls_with_correlated_error <- function(){
   # create matrix with scaled y
   #y.scale <- scale(dt[,.SD,.SDcols=ycols])
   Y <- scale(contrast_coefficients(dt[,.SD,.SDcols=ycols]))
+  #Y <- scale(contrast_coefficients(dt[,.SD,.SDcols=ycols]),center=FALSE)
   dts <- cbind(dt[,.SD,.SDcols=xcols], Y)
   dts[,subject:=factor(.I)]
   
@@ -1362,12 +1824,76 @@ explore_gls_with_correlated_error <- function(){
   # subject is the grouping factor and this is identified in the correlation statement
   form <- formula(paste('expression~',paste(c('gene',xcols),collapse='+'),sep=''))
   fit1 <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
-  summary(fit1)
+  summary(fit1)$tTable[zcols,]
   #              Value Std.Error    t-value p-value
   # zhedonia     0.08575  0.122458   0.700267  0.4838
   # zeudaimonia -0.51069  0.125713  -4.062329  0.0000
   anova(fit1)
   Anova(fit1)
+  
+  # gene is a ?? effect
+  form <- formula(paste('expression~',paste(c('gene',xcols),collapse='+'),sep=''))
+  fit.gls.2 <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ gene | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
+  summary(fit.gls.2)$tTable
+  
+  form <- formula(paste('expression~',paste(xcols,collapse='+'),sep=''))
+  fit.gls.3 <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ gene | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
+  summary(fit.gls.3)$tTable
+  
+  # unrestricted
+  fit.gls.4 <- gls(form, data=dtlong, method='ML', correlation=corSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 500, tolerance=1e-6, msVerbose = FALSE))
+  
+  #lme
+  form <- formula('expression ~ gene + male + age + white + bmi + alcohol + smoke + 
+    illness + cd3d + cd3e + cd4 + cd8a + fcgr3a + cd19 + ncam1 + 
+                  cd14 + zhedonia + zeudaimonia')
+  fit5 <- lme(form,data=dtlong,random = ~1|subject)
+  summary(fit5)$tTable[c('zhedonia','zeudaimonia'),]
+  form <- formula('expression ~ male + age + white + bmi + alcohol + smoke + 
+    illness + cd3d + cd3e + cd4 + cd8a + fcgr3a + cd19 + ncam1 + 
+                  cd14 + zhedonia + zeudaimonia')
+  fit5 <- lme(form,data=dtlong,random = ~1|subject)
+  summary(fit5)$tTable[c('zhedonia','zeudaimonia'),]
+  fit5 <- gls(form,data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject))
+  summary(fit5)$tTable[c('zhedonia','zeudaimonia'),]
+  fit5.gls <- gls(form,data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject),weights=varIdent(form = ~1|gene))
+  summary(fit5.gls)$tTable[c('zhedonia','zeudaimonia'),]
+  #********** key key key
+  fit5.lme <- lme(form,data=dtlong,random = ~1|subject,cor=corCompSymm(form=~1|subject),weights=varIdent(form = ~1|gene), control=lmeControl(msMaxIter = 500, msVerbose = FALSE))
+  
+  summary(fit5.lme)$tTable[c('zhedonia','zeudaimonia'),]
+  
+  
+
+    # gene is a random effect
+  form <- formula('expression ~ male + age + white + bmi + alcohol + smoke + 
+    illness + cd3d + cd3e + cd4 + cd8a + fcgr3a + cd19 + ncam1 + 
+                 cd14 + zhedonia + zeudaimonia + (gene|subject)')
+  form <- formula('expression ~ gene + male + age + white + bmi + alcohol + smoke + 
+    illness + cd3d + cd3e + cd4 + cd8a + fcgr3a + cd19 + ncam1 + 
+                  cd14 + zhedonia + zeudaimonia + (1|subject)')
+  fit.lmer <- lmer(form,data=dtlong)
+  form <- formula('expression ~ gene + male + age + white + bmi + alcohol + smoke + 
+    illness + cd3d + cd3e + cd4 + cd8a + fcgr3a + cd19 + ncam1 + 
+                  cd14 + zeudaimonia + (1|subject)')
+  fit.lmer2 <- lmer(form,data=dtlong)
+  anova(fit.lmer,fit.lmer2) # test zhedonia
+  form <- formula('expression ~ gene + male + age + white + bmi + alcohol + smoke + 
+    illness + cd3d + cd3e + cd4 + cd8a + fcgr3a + cd19 + ncam1 + 
+                  cd14 + zhedonia + (1|subject)')
+  fit.lmer2 <- lmer(form,data=dtlong)
+  anova(fit.lmer,fit.lmer2) # test zeudaimonia
+  
+  # gee
+  R <- cor(dt[,.SD,.SDcols=ycols])
+  form <- formula(paste('expression~',paste(c('gene',xcols),collapse='+'),sep=''))
+  form <- formula(paste('expression~',paste(xcols,collapse='+'),sep=''))
+  fit.gee <- gee(form, data=dtlong,id=gene,corstr='unstructured')
+  fit.gee <- gee(form, data=dtlong,id=gene,corstr='fixed',R=R)
+  
+  form <- formula(paste('expression~',paste(xcols,collapse='+'),sep=''))
+  fit.gee <- gee(form, data=dtlong,id=subject,corstr='unstructured')
+  fit.gee <- gee(form, data=dtlong,id=subject,corstr='fixed',R=R)
   
   # unrestricted
   form <- formula(paste('expression~',paste(c('gene',xcols),collapse='+'),sep=''))
@@ -1390,43 +1916,113 @@ explore_gls_with_correlated_error <- function(){
   mean(R23)
 }
 
+explore_model_simplification <- function(){
+  dt <- copy(dt2015)
+  dtlong <- get_dtlong(dt,2015)
+  # this replicates the analysis of Fredrickson et al.
+  # subject is the grouping factor and this is identified in the correlation statement
+  xcols2 <- setdiff(xcols,'zeudaimonia')
+  form <- formula(paste('expression~',paste(c('gene',xcols2),collapse='+'),sep=''))
+  fit2 <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
+  saveRDS(fit2,'FRED15.gls.-zeudaimonia.rds')
+  fitlm <- lm(form, data=dtlong) # use this further down
+  
+  fit1 <- readRDS('FRED15.gls.rds')
+ 
+  fit_null <- gls(expression~1, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
+  
+  summary(fit_null)$AIC
+  summary(fit1)$AIC
+  summary(fit2)$AIC
+  
+  # pseudo R^2 mc
+  pseudo_R2 <- 1-(as.numeric(logLik(fit1)/logLik(fit_null))) #mcfadden's pesudo R^2
+  
+  dt <- copy(dt2013)
+  dtmeans <- dt[,expression:=scale(apply(scale(dt[,.SD,.SDcols=ycols]),1,mean))]
+  form <- formula(paste('expression~',paste(xcols,collapse='+'),sep=''))
+  fit13 <- lm(form,data=dtmeans)
+  dt <- copy(dt2015)
+  dtmeans <- dt[,expression:=scale(apply(scale(dt[,.SD,.SDcols=ycols]),1,mean))]
+  form <- formula(paste('expression~',paste(xcols,collapse='+'),sep=''))
+  fit15 <- lm(form,data=dtmeans)
+  dt <- copy(dtCombi)
+  dtmeans <- dt[,expression:=scale(apply(scale(dt[,.SD,.SDcols=ycols]),1,mean))]
+  form <- formula(paste('expression~',paste(xcols,collapse='+'),sep=''))
+  fitCombi <- lm(form,data=dtmeans)
+  summary(fit13)$coefficients[zcols,]
+  summary(fit15)$coefficients[zcols,]
+  summary(fitCombi)$coefficients[zcols,]
+  
+  # fitlm - this is a simple lm of expression on xcols not including zeudaimonia. Now plot residuals against zeudaimonia
+  dtlong[,resid.zhed:=fitlm$residuals]
+  dtlong[,resid.zhed.std:=scale(resid.zhed)]
+  dtlong[,fitted.zhed:=fitlm$fitted]
+  qplot(x=zeudaimonia, y=resid.zhed,data=dtlong)
+  qplot(x=fitted.zhed, y=resid.zhed.std,data=dtlong)
+  summary(lm(resid.zhed~zeudaimonia,data=dtlong))
+  means <- dtlong[,.(resid.zhed=mean(resid.zhed), zeudaimonia=mean(zeudaimonia)),by=subject]
+  qplot(x=zeudaimonia, y=resid.zhed,data=means)
+  summary(lm(resid.zhed~zeudaimonia,data=means))
+}
 
-bootstrap_gls <- function(dt,xcols,ycols,niter=1000, write_it=FALSE,fn){
-  # hybrid of bootstrap and gls_with_correlated_error
-  # basically use the bootstrap data to get a distribution of b_hedonia and b_zeudaimonia
-  
-  fn <- 'cole2_clean.txt'
-  dt <- read_file(fn,year=2015)
+
+bootstrap_models <- function(dt, which_file, tests=c('mv','gls','gee'), niter=200){
+  # bootstrap estimates using multivariate regression, glm, and gee models
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
   xcols <- get_xcols()
-  ycols <- c(pro_inflam_genes(year=2015),antibody_genes(),ifn_genes())
-  
-  p <- length(ycols)
   zcols <- c('zhedonia','zeudaimonia')
-  xcols2 <- setdiff(xcols, zcols)
-  rows <- 1:nrow(dt) # observed on first iter and permuted after
-  res <- matrix(0,nrow=niter,ncol=2)
-  colnames(res) <- c('zhedonia','zeudaimonia')
+  Y <- as.matrix(dt[, .SD, .SDcols=ycols])
+  
+  # remove smoke
+  xcols <- setdiff(xcols, 'smoke')
+  
+  rows <- 1:nrow(dt)
+  mv_matrix <- matrix(0,nrow=niter,ncol=2)
+  colnames(mv_matrix) <- zcols
+  gee_table <- data.table(NULL)
+  gls_table <- data.table(NULL)
+  code <- paste(sample(LETTERS,4,replace=TRUE),collapse='')
+  gee.out <- paste(which_file,code,'bootstrap.gee.table','txt',sep='.')
+  gls.out <- paste(which_file,code,'bootstrap.gls.table','txt',sep='.')
+  samp <- 'obs'
   for(iter in 1:niter){
-    # create matrix with scaled y
-    #y.scale <- scale(dt[,.SD,.SDcols=ycols])
-    dt.boot <- dt[rows,]
-    Y <- scale(contrast_coefficients(dt.boot[,.SD,.SDcols=ycols]))
-    dt.boot <- cbind(dt.boot[,.SD,.SDcols=xcols],Y)
-    dt.boot[,subject:=factor(.I)]
-    
-    # wide to long
-    dtlong <- melt(dt.boot,id.vars=c('subject',xcols),variable.name='gene',value.name='expression')
-    dtlong[,gene:=factor(gene)]
-    
-    # this replicates the analysis of Fredrickson et al.
-    form <- formula(paste('expression~',paste(c('gene',xcols),collapse='+'),sep=''))
-    fit1 <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=lmeControl(msMaxIter = 500, msVerbose = FALSE))
-    res[iter,] <- coefficients(summary(fit1))[c('zhedonia','zeudaimonia')]
-    
-    # resample rows
+    if('mv' %in% tests){
+      Y.samp <- scale(Y[rows,])
+      form <- formula(paste('Y.samp~',paste(xcols,collapse='+'),sep=''))
+      fit <- lm(form,data=dt[rows,])
+      mv_matrix[iter,] <- apply(coefficients(fit)[zcols,], 1, mean)
+    }
+    if('gls' %in% tests){
+      dtlong <- get_dtlong(dt[rows,],year=year,center_Y=TRUE) # returns contrast coefficients
+      dtlong <- orderBy(~subject + gene, dtlong)
+      form <- formula(paste('expression~',paste(c('gene',xcols),collapse='+'),sep=''))
+      fit.gls <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=lmeControl(msMaxIter = 500, msVerbose = FALSE))
+      estimate <- summary(fit.gls)$tTable[zcols,'Value']
+      names(estimate) <- zcols
+      gls_table <- rbind(gls_table,data.table(samp=samp,t(estimate)))
+      write.table(gls_table,gls.out,quote=FALSE,row.names=FALSE,sep='\t')
+    }
+    if('gee' %in% tests){
+      dtlong <- get_dtlong(dt[rows,],year=year,center_Y=TRUE) # returns contrast coefficients
+      dtlong <- orderBy(~subject + gene, dtlong)
+      form <- formula(paste('expression~',paste(c('gene',xcols),collapse='+'),sep=''))
+      fit.geeglm <- geeglm(form, family=gaussian, data=dtlong,id=subject,waves=gene, corstr='exchangeable', std.err="san.se")
+      # summary(lm(form,data=dtlong))$coefficients[zcols,]
+      # summary(fit.geeglm)$coefficients[zcols,]
+      estimate <- summary(fit.geeglm)$coefficients[zcols,'Estimate']
+      names(estimate) <- zcols
+      gee_table <- rbind(gee_table,data.table(samp=samp,t(estimate)))
+      write.table(gee_table,gee.out,quote=FALSE,row.names=FALSE,sep='\t')
+    }
     rows <- sample(1:nrow(dt),replace=TRUE)
+    samp <- 'resample'
   }
   
+  #apply(gee_table[,.SD,.SDcols=zcols],2,quantile, probs=c(0.025,0.975))
+  #ci <- apply(mv_matrix,2,quantile, probs=c(0.025,0.975))
+  #apply(mv_matrix,2,quantile, probs=c(0.1,0.9))
   return(NULL)
 }
 
@@ -1475,7 +2071,216 @@ fake_data_gls <- function(dt,xcols,ycols,niter=1000, write_it=FALSE,fn){
   return(NULL)
 }
 
+get_Y_matrix <- function(dt, scaled=TRUE, centered=TRUE){
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  Y <- scale(dt[,.SD,.SDcols=ycols], center=centered, scale=scaled)
+  
+  return(Y)
+}
 
+get_X_matrix <- function(dt){
+  # dt <- copy(dt2015)
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  xcols <- get_xcols()
+  dt[,male:=as.integer(as.character(male))]
+  dt[,white:=as.integer(as.character(white))]
+  dt[,alcohol:=as.integer(as.character(alcohol))]
+  dt[,smoke:=as.integer(as.character(smoke))]
+  X <- as.matrix(dt[,.SD,.SDcols=xcols])
+  return(X)
+}
+
+get_dtlong <- function(dt,year=2015,center_Y=TRUE,factor2numeric=FALSE){
+  # dt is a raw data set
+  # returns scaled contrast coefficients
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  xcols <- get_xcols()
+  
+  # create matrix with scaled y
+  #y.scale <- scale(dt[,.SD,.SDcols=ycols])
+  Y <- scale(dt[,.SD,.SDcols=ycols],center=center_Y)
+  dts <- cbind(dt[,.SD,.SDcols=xcols], Y)
+  dts[,subject:=factor(.I)]
+  
+  # wide to long
+  dtlong <- melt(dts,id.vars=c('subject',xcols),variable.name='gene',value.name='expression')
+  dtlong[,gene:=factor(gene)]
+  if(factor2numeric==TRUE){
+    dtlong[,male:=as.integer(as.character(male))]
+    dtlong[,white:=as.integer(as.character(white))]
+    dtlong[,alcohol:=as.integer(as.character(alcohol))]
+    dtlong[,smoke:=as.integer(as.character(smoke))]
+  }
+  return(dtlong)
+}
+
+simulate_type1_error <- function(run_simulations=FALSE){
+  # simulate either power or type I error. 
+  if(run_simulations==TRUE){
+    # use real data to come up with fake data
+    dt <- copy(dt2015)
+    if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+    ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+    xcols <- get_xcols()
+    dt[,male:=as.integer(as.character(male))]
+    dt[,white:=as.integer(as.character(white))]
+    dt[,alcohol:=as.integer(as.character(alcohol))]
+    dt[,smoke:=as.integer(as.character(smoke))]
+    R <- cor(dt[,.SD,.SDcols=ycols])
+    Rx <- cor(dt[,.SD,.SDcols=xcols])
+    
+    n_params <- length(ycols) + length(xcols)
+    
+    p <- 30
+    multiple <- 2
+    n <- multiple * (p + length(xcols))
+    
+    
+    bigniter <- 200
+    p_table <- matrix(0,nrow=bigniter,ncol=8)
+    colnames(p_table) <- c('p1.boot','p2.boot','p1.mv','p2.mv','p1.gls','p2.gls','p1.lme','p2.lme')
+    code <- sample(LETTERS,4,replace=TRUE)
+    for(bigiter in 1:bigniter){
+      inc <- sample(1:nrow(R),p)
+      Y <- rmvnorm(n,sigma=R[inc,inc])
+      colnames(Y) <- paste("Y",1:p,sep='')
+      X <- rmvnorm(n,sigma=Rx)
+      colnames(X) <- xcols
+      
+      
+      # bootstrap t
+      do_boot <- FALSE
+      p1.boot <- 0
+      p2.boot <- 0
+      if(do_boot==TRUE){
+        niter <- 2000
+        b1 <- matrix(0,nrow=niter,ncol=p)
+        b2 <- matrix(0,nrow=niter,ncol=p)
+        rows <- 1:n
+        for(iter in 1:niter){
+          fit <- lm(Y[rows,]~X1[rows] + X2[rows])
+          ss <- summary(fit)
+          for(j in 1:p){ # save t-values instead of coefficients
+            b1[iter,j] <- ss[[paste('Response ',colnames(Y)[j],sep='')]]$coefficients['X1[rows]', "Estimate"]
+            b2[iter,j] <- ss[[paste('Response ',colnames(Y)[j],sep='')]]$coefficients['X2[rows]', "Estimate"]
+            rows <- sample(1:n,replace=TRUE)
+          }
+        }
+        b1means <- apply(b1,1,mean)
+        b2means <- apply(b2,1,mean)
+        b1bar <- mean(b1means)
+        b2bar <- mean(b2means)
+        b1se <- sd(b1means)
+        b2se <- sd(b2means)
+        t1 <- abs(b1bar)/b1se
+        t2 <- abs(b2bar)/b2se
+        p1.boot <- 2*pt(t1,df=(p-1),lower.tail = FALSE)
+        p2.boot <- 2*pt(t2,df=(p-1),lower.tail = FALSE)
+      }
+      
+      # gls and lme
+      fd <- data.table(X,Y)
+      fd[,subject:=factor(.I)]
+      # wide to long
+      dtlong <- melt(fd,id.vars=c('subject',xcols),variable.name='gene',value.name='expression')
+      dtlong[,gene:=factor(gene)]
+      form <- formula(paste('expression~',paste(c('gene',xcols),collapse='+'),sep=''))
+      fit.gls <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
+      #    fit.lme <- lme(form, random=~1|subject, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=lmeControl(maxIter=100, msMaxIter = 500, msVerbose = FALSE))
+      
+      p_table[bigiter,'p1.boot'] <- p1.boot
+      p_table[bigiter,'p2.boot'] <- p2.boot
+      form <- formula(paste('Y~',paste(xcols,collapse='+'),sep=''))
+      p_table[bigiter,'p1.mv'] <- anova(lm(form, data=fd))['zhedonia','Pr(>F)']
+      p_table[bigiter,'p2.mv'] <- anova(lm(form, data=fd))['zeudaimonia','Pr(>F)']
+      p_table[bigiter,'p1.gls'] <- summary(fit.gls)$tTable['zhedonia','p-value']
+      p_table[bigiter,'p2.gls'] <- summary(fit.gls)$tTable['zeudaimonia','p-value']
+      p_table[bigiter,'p1.lme'] <- summary(fit.lme)$tTable['zhedonia','p-value']
+      p_table[bigiter,'p2.lme'] <- summary(fit.lme)$tTable['zeudaimonia','p-value']
+      write.table(data.table(p=p,p_table),file=paste(paste(code,collapse=''),'power.gls.txt',sep=''),quote=FALSE,sep='\t',row.names=FALSE)
+    }
+    apply(p_table,2,type.1.error)
+  }
+  fn <- 'power_list.txt'
+  p_table <- data.table(read.table(fn,header=TRUE))
+  error_table <- data.table(NULL)
+  for(alpha in c(0.1,0.05,0.01,0.001,0.0001)){
+    error_table <- rbind(error_table,cbind(alpha=alpha,p_table[,.(p1=type.1.error(p1.gls,alpha=alpha),p2=type.1.error(p2.gls,alpha=alpha)),by=p]))
+  }
+  error_table[,Error:=(p1+p2)/2]
+  error_table[,p:=factor(p)]
+  gg <- ggplot(data=error_table,aes(x=alpha,y=Error,color=p))
+  gg <- gg + geom_point()
+  gg <- gg + geom_line()
+  gg <- gg + scale_x_log10()
+  gg
+  
+  error_table_2 <- data.table(NULL)
+  for(alpha in c(0.1,0.05,0.01,0.001,0.0001)){
+    error_table_2 <- rbind(error_table_2,cbind(alpha=alpha,p_table[,.(p1=type.1.error(p1.gls,alpha=alpha),p2=type.1.error(p2.gls,alpha=alpha))]))
+  }
+  error_table_2[,Error:=(p1+p2)/2]
+  error_table_2[,Inflation:=Error/alpha]
+  error_table_2[,alpha:=c('.1','.05','.01','.001','.0001')]
+  error_table_2 <- error_table_2[,.(alpha,Error=round(Error,2),Inflation=round(Inflation,1))]
+  
+  return(error_table_2)
+}
+
+simulate_gls_vs_lme <- function(){
+  n <- 200
+  p <- 50 # number of genes
+  gene <- as.factor(rep(1:p,n))
+  subject <- as.factor(rep(1:n,each=p))
+  niter <- 100
+  p_matrix <- matrix(0,nrow=niter,ncol=2)
+  colnames(p_matrix) <- c('gls','lme')
+  for(iter in 1:niter){
+    x <- rep(rnorm(n),each=p) # p values for subject 1, then subject 2
+    y <- rnorm(n*p)
+    sdt <- data.table(subject=subject,gene=gene,x=x,y=y)
+    fit1.gls <- gls(y~gene + x, correlation=corCompSymm(form = ~ 1 | subject))
+    p_matrix[iter,'gls'] <- summary(fit1.gls)$tTable['x','p-value']
+    fit1.lme <- lme(y~gene + x, random = ~1|subject, correlation=corCompSymm(form = ~ 1 | subject))
+    p_matrix[iter,'lme'] <- summary(fit1.lme)$tTable['x','p-value']
+  }
+ apply(p_matrix,2,type.1.error) # nothing here to suggest inflated type I error
+}
+
+explore_glh_and_gls <- function(){
+  dt <- copy(dt2015)
+  inc <- sample(1:length(ycols),5)
+  Y <- scale(as.matrix((dt[,.SD,.SDcols=ycols[inc]])))
+  xcols2 <- c('bmi','illness','cd3d','zhedonia','zeudaimonia')
+  dts <- cbind(dt[,.SD,.SDcols=xcols2], Y)
+  dts[,subject:=factor(.I)]
+  
+  # wide to long
+  dtlong <- melt(dts,id.vars=c('subject',xcols2),variable.name='gene',value.name='expression')
+  dtlong[,gene:=factor(gene)]
+  
+  # this replicates the analysis of Fredrickson et al.
+  # subject is the grouping factor and this is identified in the correlation statement
+  form <- formula(paste('expression~',paste(c('gene',xcols2),collapse='+'),sep=''))
+  fit1 <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
+  summary(fit1)
+  
+  form <- formula(paste('expression~',paste(c('gene',xcols2),collapse='+'),sep=''))
+  fit2 <- gls(form, data=dtlong, method='ML', correlation=corSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 50, tolerance=1e-6, msVerbose = FALSE))
+  summary(fit2)
+  
+  form <- formula(paste('Y',paste(xcols2,collapse='+'),sep='~'))
+  fit3 <- lm(form, data=dt)
+  linearHypothesis(fit3, "zeudaimonia = 0")
+  Anova(fit3,type='2') # confirm that these are testing same
+  
+  # pls
+  form <- formula(paste('Y',paste(xcols2,collapse='+'),sep='~'))
+  fit4 <- plsr(form, data=dt)
+  
+}
 
 explore_mixed_model <- function(){
   fn <- 'cole1_clean.txt'
@@ -1594,6 +2399,94 @@ explore_multivariate_regression <- function(){
   # one can have two vectors each of which is not sig diff from zero but are sig diff from each other. 
 }
 
+explore_canonical_correlation <- function(){
+  fn <- 'cole2_clean.txt'
+  dt <- read_file(fn,year=2015)
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  xcols <- get_xcols()
+  zcols <- c('zhedonia','zeudaimonia')
+  
+  Xobs <- scale(get_X_matrix(dt))
+  Yobs <- scale(as.matrix(dt[,.SD,.SDcols=ycols]))
+  
+  # look at PCA of Yobs
+  PCA <- eigen(cov(Yobs)) # this is of cor since Yobs is scaled
+  eigenvectors <- PCA$vectors
+  eigenvalues <- PCA$values
+  # note that there isn't a vector where most/all of the coefficients have same sign so where they are co-varying together. This means that something like latent variable regression wouldn't achieve the goal of the 
+  
+  # canonical correlations on the residuals on xcols will capture the space through Yresid most correlated with zhedonia and zeudaimonia
+  
+  # get residuals on xcols2
+  xcols2 <- setdiff(xcols,zcols)
+  form <- formula(paste('Yobs',paste(xcols2,collapse='+'),sep='~'))
+  Yresid <- lm(form,data=dt)$residuals
+  fit <- cc(Xobs[,zcols], Yresid)
+  fit$xcoef
+  loads <- comput(Xobs[,zcols],Yresid,fit)
+  cor(fit$scores$xscores,fit$scores$yscores)
+
+}
+
+explore_gee <- function(){
+  # gee
+  fn <- 'cole2_clean.txt'
+  dt <- read_file(fn,year=2015)
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  xcols <- get_xcols()
+  zcols <- c('zhedonia','zeudaimonia')
+  dtlong <- get_dtlong(dt, year=2015, center=TRUE)
+  dtlong <- orderBy(~subject + gene,dtlong)
+  form <- formula(paste('expression~',paste(c('gene',xcols),collapse='+'),sep=''))
+  #form <- formula(paste('expression~',paste(xcols,collapse='+'),sep=''))
+  
+  fit.lm <- lm(form,data=dtlong)
+  summary(fit.lm)$coefficients[zcols,]
+  
+  fit.geeglm <- geeglm(form, family=gaussian, data=dtlong,id=subject, waves=gene, corstr='independence', std.err="san.se")
+  summary(fit.geeglm)$coefficients[zcols,]
+  
+  fit.geeglm <- geeglm(form, family=gaussian, data=dtlong,id=subject, waves=gene, corstr='exchangeable', std.err="san.se")
+  summary(fit.geeglm)$coefficients[zcols,]
+  qplot(fit.geeglm$fitted.values,fit.geeglm$residuals)
+  # compare this to the GLS fit
+  
+  
+  fit.geeglm <- geeglm(form, family=gaussian, data=dtlong,id=subject, waves=gene, corstr='unstructured', std.err="san.se")
+  summary(fit.geeglm)$coefficients[zcols,]
+  
+  
+  Y <- get_Y_matrix(dt)
+  form2 <- formula(paste('Y~',paste(xcols,collapse='+'),sep=''))
+  fit.mv <- lm(form2, data=dt)
+  Rresid <- cor(fit.mv$residuals)
+  zcor <- fixed2Zcor(Rresid, id=dtlong$subject, waves=dtlong$gene)
+  fit.geeglm.fix <- geeglm(form, family=gaussian, data=dtlong,id=subject,waves=gene, corstr='userdefined', zcor=zcor, std.err="san.se")
+  summary(fit.geeglm.fix)$coefficients[zcols,]
+  
+  fit.gls <- gls(form, data=dtlong, method='ML', correlation=corCompSymm( form = ~ 1 | subject), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
+  summary(fit.gls)$tTable[zcols,]
+
+  fit.gls.hcs <- gls(form, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=glsControl(msMaxIter = 500, msVerbose = FALSE))
+  summary(fit.gls.hcs)$tTable[zcols,]
+  S.hcs <- getVarCov(fit.gls.hcs)
+  R.hcs <- cor(S.hcs)
+  R.gls <- summary(fit.gls.hcs)$corBeta[1:52,1:52]
+  # This doesn't work because the intercept. Make first row and col ~ .46
+  R.gls[1,] <- .46
+  R.gls[,1] <- .46
+  R.gls[1,1] <- 1.0
+  zcor <- fixed2Zcor(R.hcs, id=dtlong$subject, waves=dtlong$gene)
+  fit.geeglm.fix <- geeglm(form, family=gaussian, data=dtlong,id=subject,waves=gene, corstr='userdefined', zcor=zcor, std.err="san.se")
+  summary(fit.geeglm.fix)$coefficients[zcols,]
+
+  fit.lme <- lme(form, random = ~1|subject, data=dtlong, method='ML', correlation=corCompSymm(form = ~ 1 | subject), weights=varIdent(form = ~1|gene), control=lmeControl(maxIter=100, msMaxIter = 500, tolerance=1e-6, msVerbose = FALSE)) # tolerance=1e-6 default
+  S <- getVarCov(fit.lme, type='conditional')[[1]]
+  
+}
+
 explore_MRCE <- function(){
   # multivariate regression with correlated response
   fn <- 'cole2_clean.txt'
@@ -1602,18 +2495,204 @@ explore_MRCE <- function(){
   ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
   xcols <- get_xcols()
   
-  Xobs <- dt[,.SD,.SDcols=xcols]
-  Yobs <- as.matrix(contrast_coefficients(dt[,.SD,.SDcols=ycols]))
-  
-  # convert factors to numeric
-  Xobs[,male:=as.numeric(as.character(male))]
-  Xobs[,white:=as.numeric(as.character(white))]
-  Xobs[,smoke:=as.numeric(as.character(smoke))]
-  Xobs <- as.matrix(Xobs)
+  Xobs <- get_X_matrix(dt)
+  Yobs <- as.matrix(dt[,.SD,.SDcols=ycols])
   fit.mrce <- mrce(X=Xobs,Y=Yobs,method='single',lam1=10^(-1.5), lam2=10^(-0.5))
   data.table(predictor=colnames(Xobs),bean_beta=apply(fit.mrce$Bhat[,],1,mean))
   
   fit.mrce$mx
+  coeffs <- t(fit.mrce$Bhat[16:17,])
+  apply(coeffs,2,mean)
+}
+
+explore_prediction <- function(){
+  # how good is prediction of 2013 data from 2015 model? To do this we need the gls result for 2013 without IL6 in the model
+  # need to get dtlong2013 manually withou IL6
+  dtlong_2013 <- get_dtlong(dt2013,year=2015,factor2numeric=TRUE)
+  #Yhat_2013 <- predict(fit,newdata=dtlong_2013) # why doesn't this work?
+  dtlong_2015 <- get_dtlong(dt2015,year=2015,factor2numeric=TRUE)
+  #Yhat_2015 <- predict(fit,dtlong_2015)
+  X15 <- as.matrix(dtlong_2015[,.SD,.SDcols=get_xcols()])
+  coefs <- coefficients(fit)
+  inc <- (length(coefs)-16):length(coefs)
+  xcoefs <- coefs[inc]
+  yhat_15 <- X15%*%xcoefs + xcoefs[1]
+  yhat_15_fit <- fit$fitted
+  # data.table(yhat_15,yhat_15_fit)[1:10,] # check!
+  # now fit FRED13 to FRED15 model
+  X13 <- as.matrix(dtlong_2013[,.SD,.SDcols=get_xcols()])
+  yhat_13 <- X13%*%xcoefs + coefs[1]
+  # now fit FRED13 to FRED13 model
+  fit13 <- readRDS(paste(which_file='FRED13.yr2015.gls.rds',sep=''))
+  yhat_13_fit <- fit13$fitted
+  yresid_13_fit <- fit13$residuals
+  y_13 <- dtlong_2013[,expression]
+  qplot(y_13,yhat_13_fit,color=dtlong_2013$gene)
+  qplot(y_13,yresid_13_fit,color=dtlong_2013$subject)
+  qplot(yhat_13_fit,scale(yresid_13_fit),color=dtlong_2013$subject)
+  plot(fit13)
+  
+  sum((yresid_13_fit)^2)/sum((y_13 - mean(y_13))^2)
+  cor(yhat_13_fit,dtlong_2013[,expression])
+  qplot(yhat_13_fit13,yhat_13)
+  cor(yhat_13_fit,yhat_13)
+  cor(yhat_13_fit,dtlong_2013[,expression])
+  cor(yhat_13,dtlong_2013[,expression])
+  
+}
+
+explore_globalANCOVA <- function(){
+  fn <- 'cole2_clean.txt'
+  dt <- read_file(fn,year=2015)
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  xcols <- get_xcols()
+  zcols <- c('zhedonia','zeudaimonia')
+  covs <- setdiff(xcols,zcols)
+  
+  Y <- t(scale(dt[, .SD, .SDcols=ycols])) # GlobalAncova uses a m genes X n subjects matrix
+  form.full <- formula(paste('~',paste(c(covs,zcols),collapse='+'),sep=''))
+  model.dat <- dt[, .SD, .SDcols=xcols]
+  GA_hed <- GlobalAncova(Y, form.full, model.dat=model.dat, test.terms='zhedonia', method='permutation')$test.result['p.perm',1]
+  GA_eud <- GlobalAncova(Y, form.full, model.dat=model.dat, test.terms='zeudaimonia', method='permutation')$test.result['p.perm',1]
+  
+}
+
+explore_bull <- function(){
+  # gee
+  fn <- 'cole2_clean.txt'
+  dt <- read_file(fn,year=2015)
+  if('IL6' %in% colnames(dt)){year <- 2013}else{year <- 2015}
+  ycols <- c(pro_inflam_genes(year),antibody_genes(),ifn_genes())
+  xcols <- get_xcols()
+  zcols <- c('zhedonia','zeudaimonia')
+  dtlong <- get_dtlong(dt, year=2015, center=TRUE)
+  dtlong <- orderBy(~subject + gene,dtlong)
+  n <- nrow(dt)
+  k <- length(ycols)
+  nk <- n*k
+  
+  Y <- get_Y_matrix(dt)
+  ols_form <- formula(paste('Y~',paste(xcols,collapse='+'),sep=''))
+  fit.mv <- lm(ols_form, data=dt)
+  B <- t(coefficients(fit.mv)[zcols,])
+  Rresid <- cor(fit.mv$residuals) #working correlation matrix
+  zcor <- fixed2Zcor(Rresid, id=dtlong$subject, waves=dtlong$gene)
+  gee_form <- formula(paste('expression~',paste(c('gene',xcols,'-1'),collapse='+'),sep=''))
+  fit <- geeglm(gee_form, family=gaussian, data=dtlong,id=subject,waves=gene, corstr='userdefined', zcor=zcor, std.err="san.se")
+  fit1 <- geeglm(gee_form, family=gaussian, data=dtlong,id=subject,waves=gene, corstr='exchangeable', std.err="san.se")
+  summary(fit)$coefficients[inc,]
+  summary(fit1)$coefficients[zcols,]
+  
+   # the robust covariance matrix of beta is:
+  inc <- 1:52
+  V <- fit$geese$vbeta[inc,inc]
+  V1 <- fit1$geese$vbeta[inc,inc]
+  R <- cov2cor(V) # the correlation matrix of the coefficients (beta) - can this be estimated using bootstrap?
+  R1 <- cov2cor(V1) # the correlation matrix of the coefficients (beta) - can this be estimated using bootstrap?
+  mean(abs(R[lower.tri(R)]))
+  mean(abs(R1[lower.tri(R1)]))
+  
+  # Bull
+  rse <- sqrt(diag(V))
+  C <- rse%*%solve(V)
+  w <- C[1,]
+  Wald <- C%*%B
+  pchisq(abs(Wald), 1, ncp = 0, lower.tail = FALSE, log.p = FALSE)
+  
+  # obrien OLS/GLS
+  Ri <- cov2cor(V) # the correlation matrix of the coefficients (beta) - can this be estimated using bootstrap?
+  J <- matrix(1,nrow=nrow(Ri),ncol=1)
+  num <- t(J)%*%B
+  denom <- c(sqrt(t(J)%*%Ri%*%J))
+  Tols <- num/denom
+  df <- effective_size(nrow(dt),Rresid)
+  2*pt(abs(Tols),df=df,lower.tail = FALSE) #df certaintly less than nk
+  
+  #using bootstrap
+  which_file <- 'FRED15'
+  fn <- paste(which_file,'.bootstrap.txt',sep='')
+  boot_coeffs <- data.table(read.table(fn,header=TRUE))  # read in raw (not multiplied by contrast coeff) regression coefficients
+  Ri <- cor(boot_coeffs[,.SD, .SDcols=ycols])
+  mean(abs(Ri[lower.tri(Ri)]))
+  J <- matrix(1,nrow=nrow(Ri),ncol=1)
+  num <- t(J)%*%B
+  denom <- c(sqrt(t(J)%*%Ri%*%J))
+  Tols <- num/denom
+  df <- effective_size(nrow(dt),Rresid)
+  2*pt(abs(Tols),df=df,lower.tail = FALSE) #df certaintly less than nk
+  
+  V <- Ri
+  rse <- sqrt(diag(V))
+  C <- rse%*%solve(V)
+  w <- C[1,] # notice negative weights
+  Wald <- C%*%B
+  pchisq(abs(Wald), 1, ncp = 0, lower.tail = FALSE, log.p = FALSE)
+  
+  # Roast
+  Yt <- t(Y)
+  X <- get_X_matrix(dt)
+  hedonia <- which(colnames(X)=='zhedonia')
+  eudaimonia <- which(colnames(X)=='zeudaimonia')
+  roast(y=Yt,design=X,contrast=hedonia)
+  roast(y=Yt,design=X,contrast=eudaimonia)
+  
+  num <- t(J)%*%Ri%*%B
+  denom <- c(sqrt(t(J)%*%Ri%*%J))
+  Tgls <- num/denom # affected by negative weights
+
+  S <- matrix(c(1,0,0,1),nrow=2)/10
+  Si <- solve(S)
+  rse <- sqrt(diag(S))
+  C1 <- rse%*%Si
+  
+  S <- matrix(c(1,.5,.5,1),nrow=2)/10
+  Si <- solve(S)
+  rse <- sqrt(diag(S))
+  C2 <- rse%*%Si
+ 
+  S <- matrix(c(1,.9,.9,1),nrow=2)/10
+  Si <- solve(S)
+  rse <- sqrt(diag(S))
+  C3 <- rse%*%Si
+  
+  S <- matrix(c(1,-.5,-.5,1),nrow=2)/10
+  Si <- solve(S)
+  rse <- sqrt(diag(S))
+  C4 <- rse%*%Si
+  
+  
+  
+  B <- c(.6, -.4)
+  W <- c(C1%*%B, C2%*%B, C3%*%B, C4%*%B)
+  pchisq(W, 1, ncp = 0, lower.tail = FALSE, log.p = FALSE)
+
+  W <- B^2/diag(S)
+  pchisq(W, 1, ncp = 0, lower.tail = FALSE, log.p = FALSE)
+  
+}
+
+explore_bulls_global_hypothesis <- function(){
+  n <- 200
+  p <- 50 # the number of outcomes
+  # set up two covariates that have mean response zero on the p outcomes
+  b1 <- sample(c(rep(0.2,p/2),rep(-.2,p/2)))
+  b2 <- sample(c(rep(0.4,p/2),rep(-.4,p/2)))
+  B <- as.matrix(cbind(b1=b1,b2=b2))
+  X <- rmvnorm(n, sigma=diag(c(1,1)))
+  E <- rmvnorm(n, sigma=diag(rep((1-.2^2 -.4^2),p)))
+  Y <- t(X%*%t(B) + E)
+  df <- data.frame(X)
+  colnames(df) <- c('x1','x2')
+  
+  form.full <- formula('~x1 + x2')
+  fit <- GlobalAncova(Y, form.full, model.dat=df, test.terms='x1', method='permutation')
+  
+  # Roast
+  x1 <- which(colnames(df)=='x1')
+  x2 <- which(colnames(df)=='x2')
+  roast(y=Y,design=df,contrast=x1)
+  roast(y=Y,design=df,contrast=x2)
   
 }
 
@@ -1631,9 +2710,17 @@ simulate_the_correlated_coefficients <- function(){
     x2 <- b*z + sqrt(1-r)*rnorm(n)
     y <- rnorm(n)
     fd <- data.table(y=y,x1=x1,x2=x2)
-    fit <- lm(y~x1 + x2,, data=fd)
+    fit <- lm(y~x1 + x2, data=fd)
     fdres[iter,] <- c(coefficients(fit)[c('x1','x2')],vif(fit))
   }
   colnames(fdres) <- c('x1','x2')
   qplot(x=x1,y=x2,data=fdres)
+}
+
+cite_package <- function(){
+  toBibtex(citation('geepack'))
+  toBibtex(citation('mvtnorm'))
+  toBibtex(citation('limma'))
+  
+  
 }
